@@ -5,8 +5,8 @@ d=2
 source("CAUB_func.R")
 library(Rcpp)
 gc()
-sourceCpp("/home/zhengzhi/FACUB/utils1.cpp")
-sourceCpp("/home/zhengzhi/FACUB/MCUB.cpp")
+sourceCpp("utils1.cpp")
+sourceCpp("MCUB.cpp")
 
 library(vegan)
 library(MASS)
