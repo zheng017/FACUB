@@ -13,7 +13,7 @@ library(MASS)
 library(tictoc)
 q = 0
 m = 5
-#b0 = 1
+b0 = 1
 max_r = ifelse(d < 5, 5, 8)
 pai_param = c(.7, 1)
 type1 = "uniform"
