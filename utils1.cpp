@@ -2,23 +2,18 @@
 
 #include <RcppArmadillo.h>
 #include <cmath>
-#include <R_ext/Applic.h> // Contains vmmin (BFGS)
-
+#include <R_ext/Applic.h> 
 using namespace arma;
 using namespace Rcpp;
 
-// =============================================================================
-// Robust Input Handling
-// =============================================================================
+
 mat ensure_mat(SEXP x) {
   if (Rf_isMatrix(x)) return as<mat>(x);
   vec v = as<vec>(x);
   return mat(v.memptr(), v.n_elem, 1);
 }
 
-// =============================================================================
-// Math Helpers
-// =============================================================================
+
 inline double log1pexp(double x) {
   if (x > 35) return x; 
   if (x < -10) return std::exp(x);
@@ -29,9 +24,7 @@ inline mat sigmoid(const mat& x) {
   return 1.0 / (1.0 + exp(-x));
 }
 
-// =============================================================================
-// DATA STRUCTURES FOR VMMIN
-// =============================================================================
+
 
 struct GlobalData {
   const mat& X, mu, sigma, pai, alpha, R_mat;
@@ -46,14 +39,8 @@ struct RowData {
   const rowvec& sigma_i_fixed; 
   double m;
   int p;
-  // REMOVED: double beta_kl; 
 };
 
-// =============================================================================
-// VMMIN WRAPPERS
-// =============================================================================
-
-// --- 1. Global Optimization (Unchanged) ---
 
 double global_fn(int n, double *par, void *ex) {
   GlobalData *d = (GlobalData*)ex;
@@ -63,7 +50,6 @@ double global_fn(int n, double *par, void *ex) {
   vec B = params.subvec(d->p * d->n_factors, d->p * d->n_factors + d->p - 1);
   mat beta = reshape(params.subvec(d->p * d->n_factors + d->p, n - 1), d->p, d->q);
   
-  // Robust broadcasting of B
   mat B_mat = repmat(trans(B), d->mu.n_rows, 1);
   
   mat ll = B_mat + d->X * beta.t() + d->mu * Lambda.t();
@@ -105,8 +91,6 @@ void global_gr(int n, double *par, double *gr, void *ex) {
   gradient.subvec(d->p * d->n_factors + d->p, n - 1) = vectorise(-grad_beta_mat);
 }
 
-// --- 2. Sigma Row Wrappers (KL Annealing Removed) ---
-
 double sigma_fn(int n, double *par, void *ex) {
   RowData *d = (RowData*)ex;
   vec log_sigma(par, n, false);
@@ -115,7 +99,6 @@ double sigma_fn(int n, double *par, void *ex) {
   rowvec ll = d->B + d->X_i * d->beta.t() + d->mu_i * d->Lambda.t();
   rowvec e_mat = ll + 0.5 * (sigma_i * square(d->Lambda).t());
   
-  // REMOVED beta_kl multiplier (effectively 1.0)
   double term1 = -0.5 * (accu(sigma_i) - accu(log_sigma));
   
   rowvec log_term(d->p);
@@ -137,15 +120,12 @@ void sigma_gr(int n, double *par, double *gr, void *ex) {
   
   rowvec A = -(d->m - 1.0) * d->alpha_i % sig_e;
   
-  // REMOVED beta_kl multiplier
   rowvec d_vlb_d_sigma = -0.5 * (1.0 - 1.0/sigma_i) + A * square(d->Lambda);
   
   rowvec d_vlb_d_log = d_vlb_d_sigma % sigma_i;
   
   gradient = -trans(d_vlb_d_log);
 }
-
-// --- 3. Mu Row Wrappers (KL Annealing Removed) ---
 
 double mu_fn(int n, double *par, void *ex) {
   RowData *d = (RowData*)ex;
@@ -155,7 +135,6 @@ double mu_fn(int n, double *par, void *ex) {
   rowvec ll = d->B + d->X_i * d->beta.t() + mu_row * d->Lambda.t();
   rowvec e_mat = ll + 0.5 * (d->sigma_i_fixed * square(d->Lambda).t());
   
-  // REMOVED beta_kl multiplier
   double term1 = -0.5 * accu(square(mu_row));
   
   double term2 = accu( d->alpha_i % ((d->m - d->R_i) % (mu_row * d->Lambda.t())) );
@@ -178,15 +157,12 @@ void mu_gr(int n, double *par, double *gr, void *ex) {
   
   rowvec sum1 = d->alpha_i % ( (d->m - d->R_i) - (d->m - 1.0) * sigmoid(e_mat) );
   
-  // REMOVED beta_kl multiplier
   rowvec grad = -1.0 * mu_row + sum1 * d->Lambda;
   
   gradient = -trans(grad);
 }
 
-// =============================================================================
-// Helper to Call vmmin
-// =============================================================================
+
 void run_optim(int n_params, vec& params, void* data, optimfn fn, optimgr gr, int maxit) {
   double Fmin = 0;
   int fail = 0;
@@ -204,9 +180,7 @@ void run_optim(int n_params, vec& params, void* data, optimfn fn, optimgr gr, in
         data, &fncount, &grcount, &fail);
 }
 
-// =============================================================================
 // Main Function
-// =============================================================================
 // [[Rcpp::export]]
 List FAVA_cpp(SEXP R_in, SEXP V_in, double m, int n_factors, 
               List initials, int maxit = 200, bool trace = false) {
@@ -228,7 +202,6 @@ List FAVA_cpp(SEXP R_in, SEXP V_in, double m, int n_factors,
   mat beta = ensure_mat(initials["beta"]);
   mat Lambda = ensure_mat(initials["Lambda"]);
   
-  // Robust Pai Init
   mat new_pai;
   if (pai_in.n_elem == p) {
     if (pai_in.n_rows == p) new_pai = repmat(trans(pai_in), n, 1);
@@ -261,13 +234,10 @@ List FAVA_cpp(SEXP R_in, SEXP V_in, double m, int n_factors,
     if (trace) Rcout << "Iteration: " << iter << "\n";
     Rcpp::checkUserInterrupt();
     
-    // --- MAP Estimation for Pai (Smoothing) ---
-    // Using Beta(2,2) prior -> (sum + 1) / (n + 2)
-    // This part is preserved as it helps numerical stability of pai, not annealing.
     rowvec smooth_pai = (sum(new_alpha, 0) + 1.0) / (n + 2.0);
     new_pai = repmat(smooth_pai, n, 1);
     
-    // --- 1. Global Optimization (using vmmin) ---
+
     vec params = join_vert(vectorise(new_Lambda), new_B);
     params = join_vert(params, vectorise(new_beta));
     
@@ -278,7 +248,7 @@ List FAVA_cpp(SEXP R_in, SEXP V_in, double m, int n_factors,
     new_B = params.subvec(p * n_factors, p * n_factors + p - 1);
     new_beta = reshape(params.subvec(p * n_factors + p, params.n_elem - 1), p, q);
     
-    // --- Inner Loop ---
+    // Inner Loop 
     double delta_alpha_req = 1e-3;
     int p_iter = 1;
     bool inner_converged = false;
@@ -290,7 +260,7 @@ List FAVA_cpp(SEXP R_in, SEXP V_in, double m, int n_factors,
       mat prev_mu = new_mu;
       mat prev_sigma = new_sigma;
       
-      // 3a. Update Alpha
+      // Update Alpha
       mat B_mat = repmat(B_row, n, 1);
       mat ll = B_mat + X * new_beta.t() + new_mu * new_Lambda.t();
       mat e_mat = ll + 0.5 * (new_sigma * square(new_Lambda).t());
@@ -304,7 +274,7 @@ List FAVA_cpp(SEXP R_in, SEXP V_in, double m, int n_factors,
       mat log_odds = term_logit_pai + log_choose_const + (m - R_mat) % ll - (m - 1.0) * log_term_e + std::log(m);
       new_alpha = sigmoid(log_odds);
       
-      // 3b. Update Sigma
+      // Update Sigma
       for(int i=0; i<n; ++i) {
         vec log_sigma_i = log(new_sigma.row(i).t());
         RowData s_data = {X.row(i), new_mu.row(i), new_alpha.row(i), R_mat.row(i), 
@@ -314,7 +284,7 @@ List FAVA_cpp(SEXP R_in, SEXP V_in, double m, int n_factors,
         new_sigma.row(i) = exp(trans(log_sigma_i));
       }
       
-      // 3c. Update Mu
+      // Update Mu
       for(int i=0; i<n; ++i) {
         vec mu_i = new_mu.row(i).t();
         RowData m_data = {X.row(i), new_mu.row(i), new_alpha.row(i), R_mat.row(i), 
@@ -335,12 +305,11 @@ List FAVA_cpp(SEXP R_in, SEXP V_in, double m, int n_factors,
       p_iter++;
     }
     
-    // 4. Convergence Check (VLB)
+    // Convergence Check (VLB)
     mat B_mat = repmat(B_row, n, 1);
     mat ll = B_mat + X * new_beta.t() + new_mu * new_Lambda.t();
     mat e_mat = ll + 0.5 * (new_sigma * square(new_Lambda).t());
     
-    // Standard KL term (beta_kl = 1)
     double fun1 = -0.5 * (accu(new_sigma) + accu(square(new_mu)) - accu(log(new_sigma)));
     
     mat eps_mat = ones<mat>(n, p) * 1e-8;
