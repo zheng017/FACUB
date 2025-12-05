@@ -1,5 +1,4 @@
 library(mvnfast)
-library(psych)
 
 MSE = function(a, b) {
   mean((a-b)^2)
