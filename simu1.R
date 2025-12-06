@@ -2,7 +2,7 @@ n=200
 p=10
 d=2
 
-source("CAUB_func.R")
+source("functions.R")
 library(Rcpp)
 gc()
 sourceCpp("utils1.cpp")
