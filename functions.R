@@ -809,7 +809,7 @@ FACAUB = function(R, x1=NULL, x2=NULL, m, n_factors, maxit = 200, trace = FALSE,
     diff = abs(new.VLB - cur.VLB)
     ratio = abs(new.VLB / cur.VLB)
     if (trace) cat("New VLB: ", new.VLB, "cur VLB: ", cur.VLB, "Ratio of VLB: ", ratio, ". Difference in VLB: ", diff, "\n")
-    if (trace) cat("\nThe current evaluate results: ", evaluate_Ex4(promax(new.Lambda)$loadings,promax(data$Lambda)$loadings))
+    if (trace) cat("\nThe current evaluate results: ", evaluate_recovery(promax(new.Lambda)$loadings,promax(data$Lambda)$loadings))
     cur.VLB = new.VLB
     
     qq = list(value = log_base(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta))
@@ -882,19 +882,11 @@ eval.space <- function(A, B, orthnm = TRUE)
 }
 
 
-generate_data_FACUB = function(n, p, q, d, m, b0, pai_param, type1="uniform", type2 = "identity") {
-  a = rep(0, n)  # 个体固定效应a_i, i=1,\dots,n
-  b = rep(b0, p)  # 变量的固定效应b_j, j=1,\dots,p
+generate_data_FACUB = function(n, p, q, d, m, pai_param) {
   b = rnorm(p)
   Lambda = matrix(NA, p, d)  # 因子载荷矩阵Lambda pxd维矩阵，从均匀分布或标准正态中生成
-  if (type1 == "uniform") {
-    for (i in 1:p) {
-      Lambda[i, ] = runif(d, -2, 2)
-    }
-  } else if (type1 == "gaussian") {
-    for (i in 1:p) {
-      Lambda[i, ] = rnorm(d, 0, 1)
-    }
+  for (i in 1:p) {
+    Lambda[i, ] = runif(d, -2, 2)
   }
   
   f = matrix(NA, n, d)  # 因子f nxd维矩阵，从标准正态中生成
@@ -904,18 +896,11 @@ generate_data_FACUB = function(n, p, q, d, m, b0, pai_param, type1="uniform", ty
   if (q == 0) {   # 没有协变量
     x = NULL
     beta = NULL
-    csi = plogis(matrix(a, n, p) + matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda))
+    csi = plogis(matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda))
   } else {
     beta = matrix(rnorm(p*q), p, q)
-    if (type2 == "identity") {
-      x = matrix(rnorm(n*q), n, q)  
-    } else if (type2 == "exchange") {
-      rho = .3
-      Sigma = matrix(rho, q, q)
-      diag(Sigma) = rep(1, q)
-      x = mvrnorm(n, mu = rep(0, q), Sigma = Sigma)
-    }
-    csi = plogis(matrix(a, n, p) + matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda) + x %*% t(beta))
+    x = matrix(rnorm(n*q), n, q)  
+    csi = plogis(matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda) + x %*% t(beta))
   }
   
   pai = runif(p, pai_param[1], pai_param[2])   # CUB的参数pai
@@ -929,17 +914,8 @@ generate_data_FACUB = function(n, p, q, d, m, b0, pai_param, type1="uniform", ty
   }
   pai_mat = matrix(pai, n, p, byrow = TRUE)
   prob = pai_mat*prob_feeling(m, R, csi) + (1-pai_mat)/m
-  # nk = numeric(n)
-  # for (i in 1:n) {
-  #   z[i, ] = rbinom(p, size = 1, prob = pai)
-  #   nk[i] = length(which(z[i, ] == 0))
-  #   for (j in 1:p) {
-  #     R[i, j] = rbinom(1, size = m-1, prob = 1 - csi[i, j]) + 1
-  #   }
-  #   R[i, z[i, ] == 0] = sample(1:m, nk[i], replace = TRUE, prob = rep(1/m, m))
-  # }
   
-  return(list(R = R, x = x, beta = beta, pai = pai, Lambda = Lambda, f = f, A = a, B = b, csi = csi, prob = prob))
+  return(list(R = R, x = x, beta = beta, pai = pai, Lambda = Lambda, f = f, B = b, csi = csi, prob = prob))
 }
 
 
@@ -1009,29 +985,16 @@ generate_data_FACUB2 = function(n, p, q, d, m, b0, pai_param1, pai_param2, type1
   return(list(R = R, x = x, beta = beta, pai = pai, Lambda = Lambda, f = f, A = a, B = b, csi = csi, prob = prob))
 }
 
-generate_initials = function(R, x, n.factors, type="1", B0=1, beta0=0, sigma0=0.01, pai0=0.5) {
+generate_initials = function(R, x, n.factors, B0=1, beta0=0, sigma0=0.01, pai0=0.5) {
   n = nrow(R)
   p = ncol(R)
   q = ifelse(is.null(x), 1, ncol(x))
-  
-  if (type == "1") {
-    R_sc = scale(log2(1+R), center = TRUE, scale = TRUE)
-    re = svd(R_sc, n.factors, n.factors)
-    mu = re$u %*% diag(re$d[1:n.factors], nrow = n.factors)
-    Lambda = re$v
-  } else if (type == "2") {
-    poly_res = polychoric(R)
-    R_poly = poly_res$rho
-    re = svd(R_poly, n.factors, n.factors)
-    mu = re$u %*% diag(re$d[1:n.factors], nrow = n.factors)
-    Lambda = re$v
-  } else if (type == "3") {
-    R_norm = apply(R, 2, function(x) qnorm(rank(x) / (length(x) + 1)))
-    R_scaled = scale(R_norm)
-    re = svd(R_scaled, n.factors, n.factors)
-    mu = re$u * sqrt(n-1)
-    Lambda = re$v %*% diag(re$d[1:n.factors], nrow = n.factors) / sqrt(n-1)
-  }
+
+  R_norm = apply(R, 2, function(x) qnorm(rank(x) / (length(x) + 1)))
+  R_scaled = scale(R_norm)
+  re = svd(R_scaled, n.factors, n.factors)
+  mu = re$u * sqrt(n-1)
+  Lambda = re$v %*% diag(re$d[1:n.factors], nrow = n.factors) / sqrt(n-1)
   
   B = rep(B0, p)
   beta = matrix(beta0, p, q)
@@ -1353,7 +1316,7 @@ FAVA_new = function(R, V=NULL, m, n.factors, initials, maxit=200, trace=FALSE) {
     diff = abs(new.VLB - cur.VLB)
     ratio = abs(new.VLB / cur.VLB)
     if (trace) cat("New VLB: ", new.VLB, "cur VLB: ", cur.VLB, "Ratio of VLB: ", ratio, ". Difference in VLB: ", diff, "\n")
-    #if (trace) cat("\nThe current evaluate results: ", evaluate_Ex4(promax(new.Lambda)$loadings, promax(data$Lambda)$loadings))
+    #if (trace) cat("\nThe current evaluate results: ", evaluate_recovery(promax(new.Lambda)$loadings, promax(data$Lambda)$loadings))
     cur.VLB = new.VLB
     
     qq = list(value = log_base(c(new.Lambda, new.B, new.beta), va.mu = c(new.mu), va.sigma = c(new.sigma), pai = new.pai, alpha = new.alpha))
@@ -1834,7 +1797,7 @@ FAVA_new2 = function(R, V=NULL, m, n.factors, initials, maxit=200, trace=FALSE) 
     diff = abs(new.VLB - cur.VLB)
     ratio = abs(new.VLB / cur.VLB)
     if (trace) cat("New VLB: ", new.VLB, "cur VLB: ", cur.VLB, "Ratio of VLB: ", ratio, ". Difference in VLB: ", diff, "\n")
-    #if (trace) cat("\nThe current evaluate results: ", evaluate_Ex4(promax(new.Lambda)$loadings, promax(data$Lambda)$loadings))
+    #if (trace) cat("\nThe current evaluate results: ", evaluate_recovery(promax(new.Lambda)$loadings, promax(data$Lambda)$loadings))
     cur.VLB = new.VLB
     
     qq = list(value = log_base(c(new.Lambda, new.B, new.beta), va.mu = c(new.mu), va.sigma = c(new.sigma), pai = new.pai, alpha = new.alpha))
@@ -1903,8 +1866,9 @@ error = function(a, b) {
   return(c(error1, error2))
 }
 
-evaluate_Ex4 = function(est_Lambda, true_Lambda) {
-  c(error(est_Lambda, true_Lambda), eval.space(est_Lambda, true_Lambda)[1:2])
+evaluate_recovery = function(a, b) {
+  error1 = vegan::procrustes(a, b, symmetric = TRUE)$ss   # procrustes error
+  c(error1, eval.space(a, b)[1:2])
 }
 
 
@@ -1923,7 +1887,7 @@ evaluate_FACUB = function(true, estimated) {
   if (is.null(true$beta)) estimated$params$beta = NULL
   mat1 = cbind(true$B, true$beta, true$Lambda)
   mat2 = cbind(estimated$params$B, estimated$params$beta, estimated$params$Lambda)
-  c(evaluate_Ex4(mat1, mat2), MSE_pai, MSE_B, MSE_beta, MSE_emat, MSE_ll)
+  c(evaluate_recovery(mat1, mat2), MSE_pai, MSE_B, MSE_beta, MSE_emat, MSE_ll)
 }
 
 evaluate_FACUB2 = function(true, estimated) {
@@ -1947,9 +1911,9 @@ evaluate_FACUB2 = function(true, estimated) {
     }
     best_idx_in_combos = which.min(tmp)
     best_cols = combos[, best_idx_in_combos]
-    errors2 = evaluate_Ex4(true$Lambda, estimated$params$Lambda[, best_cols])
+    errors2 = evaluate_recovery(true$Lambda, estimated$params$Lambda[, best_cols])
   } else {
-    errors2 = evaluate_Ex4(true$Lambda, estimated$params$Lambda)
+    errors2 = evaluate_recovery(true$Lambda, estimated$params$Lambda)
   }
   
   
@@ -1965,17 +1929,17 @@ evaluate_FACUB2 = function(true, estimated) {
   
   
   if (ncol(mat1) == ncol(mat2)) {
-    errors1 = evaluate_Ex4(mat2, mat1)
+    errors1 = evaluate_recovery(mat2, mat1)
   } else if (ncol(mat1) > ncol(mat2) ) {
     if (ncol(estimated$params$beta) > ncol(true$beta) && (ncol(estimated$params$Lambda) == ncol(true$Lambda))) {
-      errors1 = evaluate_Ex4(cbind(estimated$params$B, estimated$params$beta[,1:ncol(true$beta)], estimated$params$Lambda), mat2)
+      errors1 = evaluate_recovery(cbind(estimated$params$B, estimated$params$beta[,1:ncol(true$beta)], estimated$params$Lambda), mat2)
     } else if (ncol(estimated$params$beta) == ncol(true$beta) && (ncol(estimated$params$Lambda) > ncol(true$Lambda))) {
-      errors1 = evaluate_Ex4(cbind(estimated$params$B, estimated$params$beta, estimated$params$Lambda[,best_cols]), mat2)
+      errors1 = evaluate_recovery(cbind(estimated$params$B, estimated$params$beta, estimated$params$Lambda[,best_cols]), mat2)
     } else if (ncol(estimated$params$beta) > ncol(true$beta) && (ncol(estimated$params$Lambda) > ncol(true$Lambda))) {
-      errors1 = evaluate_Ex4(cbind(estimated$params$B, estimated$params$beta[,1:ncol(true$beta)], estimated$params$Lambda[,best_cols]), mat2)
+      errors1 = evaluate_recovery(cbind(estimated$params$B, estimated$params$beta[,1:ncol(true$beta)], estimated$params$Lambda[,best_cols]), mat2)
     }
   } else {
-    errors1 = evaluate_Ex4(mat2, mat1)
+    errors1 = evaluate_recovery(mat2, mat1)
   }
   
   c(errors1, errors2, MSE_pai, MSE_B, MSE_beta, MSE_emat, MSE_ll)
@@ -2004,7 +1968,7 @@ evaluate_FACUB3 = function(true, estimated) {
     }
     best_idx_in_combos = which.min(tmp)
     best_cols = combos[, best_idx_in_combos]
-    errors2 = evaluate_Ex4(true$Lambda, estimated$params$Lambda[, best_cols])
+    errors2 = evaluate_recovery(true$Lambda, estimated$params$Lambda[, best_cols])
   } else {
     errors2 = rep(0,4)
   }
@@ -2024,14 +1988,14 @@ evaluate_FACUB3 = function(true, estimated) {
   
   
   if (ncol(mat1) == ncol(mat2)) {
-    errors1 = evaluate_Ex4(mat2, mat1)
+    errors1 = evaluate_recovery(mat2, mat1)
   } else if (ncol(mat1) > ncol(mat2) ) {
     if (ncol(estimated$params$beta) > ncol(true$beta) && (ncol(estimated$params$Lambda) == ncol(true$Lambda))) {
-      errors1 = evaluate_Ex4(cbind(estimated$params$B, estimated$params$beta[,1:ncol(true$beta)], estimated$params$Lambda), mat2)
+      errors1 = evaluate_recovery(cbind(estimated$params$B, estimated$params$beta[,1:ncol(true$beta)], estimated$params$Lambda), mat2)
     } else if (ncol(estimated$params$beta) == ncol(true$beta) && (ncol(estimated$params$Lambda) > ncol(true$Lambda))) {
-      errors1 = evaluate_Ex4(cbind(estimated$params$B, estimated$params$beta, estimated$params$Lambda[,best_cols]), mat2)
+      errors1 = evaluate_recovery(cbind(estimated$params$B, estimated$params$beta, estimated$params$Lambda[,best_cols]), mat2)
     } else if (ncol(estimated$params$beta) > ncol(true$beta) && (ncol(estimated$params$Lambda) > ncol(true$Lambda))) {
-      errors1 = evaluate_Ex4(cbind(estimated$params$B, estimated$params$beta[,1:ncol(true$beta)], estimated$params$Lambda[,best_cols]), mat2)
+      errors1 = evaluate_recovery(cbind(estimated$params$B, estimated$params$beta[,1:ncol(true$beta)], estimated$params$Lambda[,best_cols]), mat2)
     }
   } else {
     errors1 = c(procrustes(mat1, mat2, symmetric=TRUE)$ss, rep(0,3))
@@ -2053,7 +2017,7 @@ evaluate_MCUB = function(true, estimated) {
   MSE_emat = MSE_ll = MSE(estimated$csi, true$csi)
   mat1 = cbind(true$B, true$beta, true$Lambda)
   mat2 = cbind(estimated$B, estimated$beta)
-  c(evaluate_Ex4(mat1, mat2), MSE_pai, MSE_B, MSE_beta, MSE_emat, MSE_ll)
+  c(evaluate_recovery(mat1, mat2), MSE_pai, MSE_B, MSE_beta, MSE_emat, MSE_ll)
 }
 
 evaluate_MCUBo = function(true, estimated) {
@@ -2070,7 +2034,7 @@ evaluate_MCUBo = function(true, estimated) {
   MSE_emat = MSE_ll = MSE(estimated$csi, true$csi)
   mat1 = cbind(true$B, true$beta, true$Lambda)
   mat2 = cbind(estimated$B, estimated$beta)
-  c(evaluate_Ex4(mat1, mat2), MSE_pai, MSE_B, MSE_beta, MSE_emat, MSE_ll)
+  c(evaluate_recovery(mat1, mat2), MSE_pai, MSE_B, MSE_beta, MSE_emat, MSE_ll)
 }
 
 
@@ -2205,41 +2169,36 @@ generate_data_csda = function(n, p, k) {
 }
 
 
-hic_new = function(R, V=NULL, m, r) {
+hic = function(R, V=NULL, m, r) {
   n = nrow(R)
   p = ncol(R)
-  aic = bic = hic1 = hic2 = hic3 = numeric(r)
+  aic = hic1 = hic2 = numeric(r)
   sn = log(n)/2
   for (w in 1:r) {
-    initials = generate_initials(R, V, w, type = "3", 0, 0, 0.1, 0.5)
+    initials = generate_initials(R, V, w, 0, 0, 0.1, 0.5)
     re = FAVA_cpp(R, V, m, w, initials)
     aic[w] = -2*re$EE + 2*(w*p + n*w-w^2)     # aic
-    bic[w] = -2*re$EE + log(n*p)*(w*p + n*w - w^2)  # bic in jasa(2022) 2*n*w?
-    hic1[w] = -2*re$EE + log(n)*(w*p-w^2) + 2*(w*n)  # hic1 in JCGS(2021)
-    hic2[w] = -re$EE + sn*(w*p -w^2 +w*n- re$EN2)    # hic2 with sn=log(n)/2 in JASA(2023)
-    hic3[w] = -re$EE + (w*p -w^2 + w*n- re$EN2)     # hic3 with sn=1 in JASA(2023)
+    hic1[w] = -re$EE + sn*(w*p -w^2 +w*n- re$EN2)    # hic2 with sn=log(n)/2 in JASA(2023)
+    hic2[w] = -re$EE + (w*p -w^2 + w*n- re$EN2)     # hic3 with sn=1 in JASA(2023)
   }
   
-  return(list(aic = aic,bic = bic,hic1=hic1, hic2=hic2, hic3=hic3))
+  return(list(aic = aic, hic1 = hic1, hic2=hic2))
 }
 
-hic_KLAnnealing_new = function(R, V=NULL, m, r) {
+hic_KLAnnealing = function(R, V=NULL, m, r) {
   n = nrow(R)
   p = ncol(R)
-  aic = bic = hic1 = hic2 = hic3 = numeric(r)
+  aic = hic1 = hic2 = numeric(r)
   sn = log(n)/2
   for (w in 1:r) {
-    initials = generate_initials(R, V, w, type = "3", 0, 0, 0.1, 0.5)
+    initials = generate_initials(R, V, w, 0, 0, 0.1, 0.5)
     re = FAVA_KLAnnealing_cpp(R, V, m, w, initials)
     aic[w] = -2*re$EE + 2*(w*p + n*w-w^2)     # aic
-    bic[w] = -2*re$EE + log(n*p)*(w*p + n*w - w^2)  # bic in jasa(2022)
-    hic1[w] = -2*re$EE + log(n)*(w*p-w^2) + 2*(w*n)  # hic1 in JCGS(2021)
-    hic2[w] = -re$EE + sn*(w*p -w^2 +w*n- re$EN2)    # hic2 with sn=log(n)/2 in JASA(2023)
-    hic3[w] = -re$EE + (w*p -w^2 + w*n- re$EN2)     # hic3 with sn=1 in JASA(2023)
+    hic1[w] = -re$EE + sn*(w*p -w^2 +w*n- re$EN2)    # hic2 with sn=log(n)/2 in JASA(2023)
+    hic2[w] = -re$EE + (w*p -w^2 + w*n- re$EN2)     # hic3 with sn=1 in JASA(2023)
   }
   
-  return(list(aic = aic,bic = bic,hic1=hic1, hic2=hic2, hic3=hic3))
+  return(list(aic = aic, hic1 = hic1, hic2 = hic2))
 }
-
 
 
