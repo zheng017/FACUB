@@ -64,9 +64,7 @@ generate_data_FACUB = function(n, p, q, d, m, pai_param) {
 }
 
 
-generate_data_FACUB2 = function(n, p, q, d, m, b0, pai_param1, pai_param2, type1="uniform", type2 = "identity") {
-  a = rep(0, n)  # 个体固定效应a_i, i=1,\dots,n
-  b = rep(b0, p)  # 变量的固定效应b_j, j=1,\dots,p
+generate_data_FACUB2 = function(n, p, q, d, m, pai_param1, pai_param2) {
   b = rnorm(p)
   Lambda = matrix(NA, p, d)  # 因子载荷矩阵Lambda pxd维矩阵，从均匀分布或标准正态中生成
   if (type1 == "uniform") {
@@ -86,24 +84,13 @@ generate_data_FACUB2 = function(n, p, q, d, m, b0, pai_param1, pai_param2, type1
   if (q == 0) {   # 没有协变量
     x = NULL
     beta = NULL
-    csi = plogis(matrix(a, n, p) + matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda))
+    csi = plogis(matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda))
   } else {
     beta = matrix(rnorm(p*q), p, q)
-    if (type2 == "identity") {
-      x = matrix(rnorm(n*q), n, q)  
-    } else if (type2 == "exchange") {
-      rho = .3
-      Sigma = matrix(rho, q, q)
-      diag(Sigma) = rep(1, q)
-      x = mvrnorm(n, mu = rep(0, q), Sigma = Sigma)
-    }
-    csi = plogis(matrix(a, n, p) + matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda) + x %*% t(beta))
+    x = matrix(rnorm(n*q), n, q)  
+    csi = plogis(matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda) + x %*% t(beta))
   }
   
-  # z2 = sample(0:1, p, replace=TRUE, prob=c(1/3,2/3))
-  # pai = numeric(p)
-  # pai[z2 == 0] = runif(length(which(z2 == 0)), pai_param1[1], pai_param1[2])
-  # pai[z2 == 1] = runif(length(which(z2 == 1)), pai_param2[1], pai_param2[2])
   pai1 = runif(floor(p/3), pai_param1[1], pai_param1[2])   # CUB的参数pai
   pai2 = runif(p-length(pai1), pai_param2[1], pai_param2[2])
   pai = c(pai1, pai2)
@@ -117,17 +104,28 @@ generate_data_FACUB2 = function(n, p, q, d, m, b0, pai_param1, pai_param2, type1
   }
   pai_mat = matrix(pai, n, p, byrow = TRUE)
   prob = pai_mat*prob_feeling(m, R, csi) + (1-pai_mat)/m
-  # nk = numeric(n)
-  # for (i in 1:n) {
-  #   z[i, ] = rbinom(p, size = 1, prob = pai)
-  #   nk[i] = length(which(z[i, ] == 0))
-  #   for (j in 1:p) {
-  #     R[i, j] = rbinom(1, size = m-1, prob = 1 - csi[i, j]) + 1
-  #   }
-  #   R[i, z[i, ] == 0] = sample(1:m, nk[i], replace = TRUE, prob = rep(1/m, m))
-  # }
   
-  return(list(R = R, x = x, beta = beta, pai = pai, Lambda = Lambda, f = f, A = a, B = b, csi = csi, prob = prob))
+  return(list(R = R, x = x, beta = beta, pai = pai, Lambda = Lambda, f = f, B = b, csi = csi, prob = prob))
+}
+
+generate_data_URV = function(n, p, k) {
+  Lambda = matrix(runif(p*d, -2, 2), p, k)
+  Phi = matrix(0, k, k)
+  diag(Phi) = 1
+  f = mvrnorm(n, rep(0, k), Phi)
+  Theta = diag(runif(p, 0, 1))
+  delta = mvrnorm(n, rep(0, p), Theta)
+  xstar = f %*% t(Lambda) + delta
+  ind1 = which(xstar < -1.2)
+  ind2 = which(xstar >= -1.2 & xstar < 0)
+  ind3 = which(xstar >= 0 & xstar < 1.2)
+  ind4 = which(xstar >= 1.2)
+  x = matrix(0, n, p)
+  x[ind1] = 1
+  x[ind2] = 2
+  x[ind3] = 3
+  x[ind4] = 4
+  return(list(R = x, f = f, Lambda = Lambda, k = k, p = p))
 }
 
 generate_initials = function(R, x, n.factors, B0=1, beta0=0, sigma0=0.01, pai0=0.5) {
@@ -147,124 +145,6 @@ generate_initials = function(R, x, n.factors, B0=1, beta0=0, sigma0=0.01, pai0=0
   pai = rep(pai0, p)
   alpha = matrix(pai, n, p, byrow = TRUE)
   list(mu = mu, sigma = sigma, pai = pai, alpha = alpha, B = B, beta = beta, Lambda = Lambda)
-}
-
-
-generate_data_FACAUB = function(n, p, q, d, m, b0, pai_param, zeta, type1 = "uniform", type2 = "identity") {
-  a = rep(0, n)
-  b = rep(b0, p)
-  # generate loadings matrix: Lambda  pxd
-  if (type1 == "uniform") {
-    Lambda = matrix(runif(p*d, -2, 2), p, d)
-  } else if (type1 == "gaussian") {
-    Lambda = matrix(rnorm(p*d), p, d)
-  }
-  # generate factors: f nxd
-  f = matrix(rnorm(n*d), n, d)
-  if (q == 0) {
-    x1 = NULL
-    beta = NULL
-    csi = plogis( matrix(a, n, p) + matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda) )
-  } else {
-    beta = matrix(rnorm(p*q), p, q)
-    if (type2 == "identity") {
-      x = matrix(rnorm(n*q), n, q)
-    } else if (type2 == "exchange") {
-      rho = 0.3
-      Sigma = matrix(rho, q, q)
-      diag(Sigma) = rep(1, q)
-      x = rmvn(n, rep(0, q), Sigma)
-    }
-    csi = plogis( matrix(a, n, p) + matrix(b, n, p, byrow = TRUE) + x1 %*% beta + f %*% t(Lambda) )
-  }
-  
-  pai = runif(p, pai_param[1], pai_param[2])
-  z = R = matrix(NA, n, p)
-  for (j in 1:p) {
-    z[, j] = sample(0:1, n, replace = TRUE, prob = c(1-pai[j], pai[j]))
-    z_idx = which(z[, j] == 1)
-    R[z_idx, j] = rbinom(length(z_idx), m-1, prob = 1-csi[z_idx, j]) + 1
-    z0_idx = setdiff(1:n, z_idx)
-    R[z0_idx, j] = sample(1:m, length(z0_idx), replace = TRUE, prob = prob_u(m, zeta[j]))
-  }
-  pai_mat = matrix(pai, n, p, byrow = TRUE)
-  prob = pai_mat*prob_feeling(m, R, csi) + (1-pai_mat)*prob_uncertainty(m, R, matrix(zeta, n, p, byrow = TRUE))
-  return(list(R = R,
-              A = a,
-              B = b,
-              Lambda = Lambda,
-              f = f,
-              csi = csi,
-              pai = pai,
-              zeta = zeta,
-              prob = prob))
-}
-
-
-
-generate_data_FACAUB2 = function(n, p, q, d, m, b0, pai_param, zeta, type1 = "uniform", type2 = "identity") {
-  a = rep(0, n)
-  b = rep(b0, p)
-  # generate loadings matrix: Lambda  pxd
-  Lambda = matrix(NA, p, d)
-  if (type1 == "uniform") {
-    for (i in 1:p) {
-      Lambda[i, ] = runif(d, -2, 2)
-    }
-  } else if (type1 == "gaussian") {
-    Lambda[i, ] = rnorm(d, 0, 1)
-  }
-  # generate factors: f nxd
-  f = matrix(NA, n, d)
-  for (i in 1:n) {
-    f[i, ] = rnorm(d, 0, 1)
-  }
-  
-  if (q == 0) {
-    x1 = NULL
-    beta = NULL
-    csi = plogis( matrix(a, n, p) + matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda) )
-  } else {
-    beta = matrix(rnorm(p*q), p, q)
-    if (type2 == "identity") {
-      x = matrix(rnorm(n*q), n, q)
-    } else if (type2 == "exchange") {
-      rho = 0.3
-      Sigma = matrix(rho, q, q)
-      diag(Sigma) = rep(1, q)
-      x = rmvn(n, rep(0, q), Sigma)
-    }
-    csi = plogis( matrix(a, n, p) + matrix(b, n, p, byrow = TRUE) + x1 %*% beta + f %*% t(Lambda) )
-  }
-  
-  pai = runif(p, pai_param[1], pai_param[2])
-  z = R = matrix(NA, n, p)
-  nk = numeric(n)
-  for (i in 1:n) {
-    z[i, ] = rbinom(p, size = 1, prob = pai)
-    idx0 = which(z[i, ] == 0)
-    nk[i] = length(idx0)
-    for (j in 1:p) {
-      R[i, j] = rbinom(1, size=m-1, prob=1-csi[i, j]) + 1
-    }
-    if (nk[i] != 0) {
-      for (k in 1:nk[i]) {
-        R[i, idx0[k]] = sample(1:m, 1, prob = prob_u(m, zeta[idx0[k]]))
-      }
-    }
-  }
-  
-  pai_mat = matrix(pai, n, p, byrow = TRUE)
-  prob = pai_mat*prob_feeling(m, R, csi) + (1-pai_mat)*prob_uncertainty(m, R, matrix(zeta, n, p, byrow = TRUE))
-  return(list(R = R,
-              A = a,
-              B = b,
-              Lambda = Lambda,
-              f = f,
-              csi = csi,
-              pai = pai,
-              zeta = zeta,
-              prob = prob))
 }
 
 
@@ -1132,29 +1012,13 @@ FACAUB = function(R, x1=NULL, x2=NULL, m, n_factors, maxit = 200, trace = FALSE,
     q = ncol(x1)
   }
   
-  # initialization of parameters and variational parameters
-  R_scale = scale(log2(1+R), center = TRUE, scale = TRUE)
-  re = svd(R_scale, n_factors, n_factors)
-  if (n_factors == 1) {
-    mu = new_mu = re$u * (re$d[1])
-  } else {
-    mu = new_mu = re$u %*% diag(re$d[1:n_factors])  # nxn_factors dimension
-  }
-  Lambda = new_Lambda = re$v
-  B = new_B = rep(1, p)
-  beta = new_beta = matrix(1, p, q)
-  sigma = new_sigma = matrix(0.01, n, n_factors)  # nxn_factors dimension
-  pai = new_pai = rep(0.5, p)
-  alpha = new_alpha = matrix(pai, n, p, byrow = TRUE)
-  if (!is.null(init)) {
-    mu=new.mu=init$mu
-    sigma=new.sigma=init$sigma
-    B=new.B=init$B
-    beta=new.beta=init$beta
-    Lambda=new.Lambda=init$Lambda
-    pai=new.pai=init$pai
-    alpha=new.alpha=init$alpha
-  }
+  mu = new.mu = initials$mu
+  sigma = new.sigma = initials$sigma
+  pai = new.pai = initials$pai
+  alpha = new.alpha = initials$alpha
+  B = new.B = initials$B
+  beta = new.beta = initials$beta
+  Lambda = new.Lambda = initials$Lambda
   # parameters of discrete beta distribution in adjusted uncertainty term
   # first assume that no covariates included in zeta, just as parameters pai.
   zeta = new_zeta = rep(1, p)
@@ -1596,7 +1460,8 @@ evaluate_FACUB = function(true, estimated) {
   c(evaluate_recovery(mat1, mat2), MSE_pai, MSE_B, MSE_beta, MSE_emat, MSE_ll)
 }
 
-evaluate_FACUB2 = function(true, estimated) {
+
+evaluate_FACUB2= function(true, estimated) {
   MSE_pai = MSE(estimated$params$pai, true$pai)
   MSE_B = MSE(estimated$params$B, true$B)
   MSE_emat = MSE(estimated$e.mat, true$csi)
@@ -1619,64 +1484,7 @@ evaluate_FACUB2 = function(true, estimated) {
     best_cols = combos[, best_idx_in_combos]
     errors2 = evaluate_recovery(true$Lambda, estimated$params$Lambda[, best_cols])
   } else {
-    errors2 = evaluate_recovery(true$Lambda, estimated$params$Lambda)
-  }
-  
-  
-  if (ncol(estimated$params$beta) == ncol(true$beta)) {
-    MSE_beta = MSE(estimated$params$beta, true$beta)
-  } else {
-    MSE_beta = 0
-  }
-  
-  mat1 = cbind(estimated$params$B, estimated$params$beta, estimated$params$Lambda)
-  mat2 = cbind(true$B, true$beta, true$Lambda)
-  
-  
-  
-  if (ncol(mat1) == ncol(mat2)) {
-    errors1 = evaluate_recovery(mat2, mat1)
-  } else if (ncol(mat1) > ncol(mat2) ) {
-    if (ncol(estimated$params$beta) > ncol(true$beta) && (ncol(estimated$params$Lambda) == ncol(true$Lambda))) {
-      errors1 = evaluate_recovery(cbind(estimated$params$B, estimated$params$beta[,1:ncol(true$beta)], estimated$params$Lambda), mat2)
-    } else if (ncol(estimated$params$beta) == ncol(true$beta) && (ncol(estimated$params$Lambda) > ncol(true$Lambda))) {
-      errors1 = evaluate_recovery(cbind(estimated$params$B, estimated$params$beta, estimated$params$Lambda[,best_cols]), mat2)
-    } else if (ncol(estimated$params$beta) > ncol(true$beta) && (ncol(estimated$params$Lambda) > ncol(true$Lambda))) {
-      errors1 = evaluate_recovery(cbind(estimated$params$B, estimated$params$beta[,1:ncol(true$beta)], estimated$params$Lambda[,best_cols]), mat2)
-    }
-  } else {
-    errors1 = evaluate_recovery(mat2, mat1)
-  }
-  
-  c(errors1, errors2, MSE_pai, MSE_B, MSE_beta, MSE_emat, MSE_ll)
-}
-
-
-
-evaluate_FACUB3 = function(true, estimated) {
-  MSE_pai = MSE(estimated$params$pai, true$pai)
-  MSE_B = MSE(estimated$params$B, true$B)
-  MSE_emat = MSE(estimated$e.mat, true$csi)
-  MSE_ll = MSE(estimated$ll, true$csi)
-  if (is.null(true$beta)) {
-    estimated$params$beta = NULL
-    MSE_beta = 0
-  }
-  
-  if (ncol(estimated$params$Lambda) >= ncol(true$Lambda)) {
-    combos= combn(ncol(estimated$params$Lambda), ncol(true$Lambda))
-    num_combos = ncol(combos)
-    tmp = numeric(num_combos)
-    for (i in 1:num_combos) {
-      current_idx = combos[,i]
-      A_sub = estimated$params$Lambda[, current_idx]
-      tmp[i] = procrustes(A_sub, true$Lambda, symmetric = TRUE)$ss
-    }
-    best_idx_in_combos = which.min(tmp)
-    best_cols = combos[, best_idx_in_combos]
-    errors2 = evaluate_recovery(true$Lambda, estimated$params$Lambda[, best_cols])
-  } else {
-    errors2 = rep(0,4)
+    errors2 = rep(0,3)
   }
   
   
@@ -1692,7 +1500,6 @@ evaluate_FACUB3 = function(true, estimated) {
   mat2 = cbind(true$B, true$beta, true$Lambda)
   
   
-  
   if (ncol(mat1) == ncol(mat2)) {
     errors1 = evaluate_recovery(mat2, mat1)
   } else if (ncol(mat1) > ncol(mat2) ) {
@@ -1704,7 +1511,7 @@ evaluate_FACUB3 = function(true, estimated) {
       errors1 = evaluate_recovery(cbind(estimated$params$B, estimated$params$beta[,1:ncol(true$beta)], estimated$params$Lambda[,best_cols]), mat2)
     }
   } else {
-    errors1 = c(procrustes(mat1, mat2, symmetric=TRUE)$ss, rep(0,3))
+    errors1 = c(procrustes(mat1, mat2, symmetric=TRUE)$ss, rep(0,2))
   }
   
   c(errors1, errors2, MSE_pai, MSE_B, MSE_beta, MSE_emat, MSE_ll)
@@ -1741,137 +1548,6 @@ evaluate_MCUBo = function(true, estimated) {
   mat1 = cbind(true$B, true$beta, true$Lambda)
   mat2 = cbind(estimated$B, estimated$beta)
   c(evaluate_recovery(mat1, mat2), MSE_pai, MSE_B, MSE_beta, MSE_emat, MSE_ll)
-}
-
-
-generate_data_lavaan = function(n, p, d) {
-  Phi = matrix(c(1, .2, .5, .2, 1, .8, .5, .8, 1), 3, 3)
-  choice = seq(0.3, 0.9, 0.1)
-  Lambda = matrix(c(sample(choice, 17, replace = TRUE), rep(0, p-1), sample(choice, 17, replace = TRUE), rep(0, p-1), sample(choice, 18, replace = TRUE)), p, d)
-  f = rmvn(n, rep(0, d), Phi)
-  #Lambda = matrix(runif(p*d, 0, 1), p, d)
-  Theta = diag(p) - diag(diag(Lambda %*% Phi %*% t(Lambda)))
-  delta = rmvn(n, rep(0, p), Theta)
-  #f = matrix(NA, n, d)
-  #for (i in 1:n) {
-  #  f[i, ] = rnorm(d, 0, 1)
-  #}
-  xstar = f %*% t(Lambda) + delta
-  ind1 = which(xstar < -1.2)
-  ind2 = which(xstar >= -1.2 & xstar < 0)
-  ind3 = which(xstar >= 0 & xstar < 1.2)
-  ind4 = which(xstar >= 1.2)
-  x = matrix(0, n, p)
-  x[ind1] = 1
-  x[ind2] = 2
-  x[ind3] = 3
-  x[ind4] = 4
-  return(list(R = x, f = f, Lambda = Lambda))
-}
-
-generate_data_lavaan2 = function(n, p, d) {
-  Phi = matrix(c(1, .2, .5, .2, 1, .8, .5, .8, 1), 3, 3)
-  choice = seq(0.3, 0.9, 0.1)
-  Lambda = matrix(c(sample(choice, 17, replace = TRUE), rep(0, p-1), sample(choice, 17, replace = TRUE), rep(0, p-1), sample(choice, 18, replace = TRUE)), p, d)
-  f = rmvn(n, rep(0, d), Phi)
-  #Lambda = matrix(runif(p*d, 0, 1), p, d)
-  Theta = diag(p) - diag(diag(Lambda %*% Phi %*% t(Lambda)))
-  delta = rmvn(n, rep(0, p), Theta)
-  #f = matrix(NA, n, d)
-  #for (i in 1:n) {
-  #  f[i, ] = rnorm(d, 0, 1)
-  #}
-  xstar = f %*% t(Lambda) + delta
-  ind1 = which(xstar < -3)
-  ind2 = which(xstar >= -3 & xstar < -1)
-  ind3 = which(xstar >= -1 & xstar < 1)
-  ind4 = which(xstar >= 1 & xstar < 3)
-  ind5 = which(xstar >= 3)
-  x = matrix(0, n, p)
-  x[ind1] = 1
-  x[ind2] = 2
-  x[ind3] = 3
-  x[ind4] = 4
-  x[ind5] = 5
-  return(list(R = x, f = f, Lambda = Lambda))
-}
-
-
-generate_data_csda1 = function(n, type = NULL) {
-  p = 6
-  k = 2
-  Lambda = matrix(c(.9, .8 , .7, .5, rep(0, 5), .6, .7, .8), p, k)
-  Phi = matrix(c(1, .5, .5, 1), 2, 2)
-  if (type == "standard") {
-    Phi = diag(k)
-  }
-  f = mvrnorm(n, rep(0, k), Phi)
-  Theta = diag(p) - diag(diag(Lambda%*%Phi%*%t(Lambda)))
-  delta = mvrnorm(n, rep(0, p), Theta)
-  xstar = f %*% t(Lambda) + delta
-  ind1 = which(xstar < -1.2)
-  ind2 = which(xstar >= -1.2 & xstar < 0)
-  ind3 = which(xstar >= 0 & xstar < 1.2)
-  ind4 = which(xstar >= 1.2)
-  x = matrix(0, n, p)
-  x[ind1] = 1
-  x[ind2] = 2
-  x[ind3] = 3
-  x[ind4] = 4
-  return(list(R = x, f = f, Lambda = Lambda, k = k, p = p))
-}
-
-generate_data_csda2 = function(n, type = NULL) {
-  p = 15
-  k = 3
-  Lambda = matrix(c(seq(.4, .8, .1), .3, rep(0, p-1), seq(.8, .4, -.1), rep(0, p-1), seq(.5, .9, .1), .4), p, k)
-  Phi = matrix(c(1, .2, .5, .2, 1, .8, .5, .8, 1), k, k)
-  if (type == "standard") {
-    Phi = diag(k)
-  }
-  f = mvrnorm(n, rep(0, k), Phi)
-  Theta = diag(p) - diag(diag(Lambda%*%Phi%*%t(Lambda)))
-  delta = mvrnorm(n, rep(0, p), Theta)
-  xstar = f %*% t(Lambda) + delta
-  ind1 = which(xstar < -1.2)
-  ind2 = which(xstar >= -1.2 & xstar < 0)
-  ind3 = which(xstar >= 0 & xstar < 1.2)
-  ind4 = which(xstar >= 1.2)
-  x = matrix(0, n, p)
-  x[ind1] = 1
-  x[ind2] = 2
-  x[ind3] = 3
-  x[ind4] = 4
-  return(list(R = x, f = f, Lambda = Lambda, k = k, p = p))
-}
-
-
-generate_data_csda = function(n, p, k) {
-  Lambda = matrix(runif(p*d, -2, 2), p, k)
-  #Lambda = matrix(rnorm(p*k), p, k)
-  #Lambda = matrix(c(.9, .8 , .7, .5, rep(0, 5), .6, .7, .8), p, k)
-  # Lambda = matrix(0, p, k)
-  # for (kk in 1:k) {
-  #   Lambda[(p/k*(kk-1)+1):(p/k*kk), kk] = sample(seq(0.5, 1, 0.1), p/k, replace = TRUE)
-  # }
-  Phi = matrix(0, k, k)
-  diag(Phi) = 1
-  f = mvrnorm(n, rep(0, k), Phi)
-  # f = matrix(rnorm(n*k), n, k)
-  Theta = diag(runif(p, 0, 1))
-  #Theta = abs(diag(p) - diag(diag(Lambda%*%Phi%*%t(Lambda))))
-  delta = mvrnorm(n, rep(0, p), Theta)
-  xstar = f %*% t(Lambda) + delta
-  ind1 = which(xstar < -1.2)
-  ind2 = which(xstar >= -1.2 & xstar < 0)
-  ind3 = which(xstar >= 0 & xstar < 1.2)
-  ind4 = which(xstar >= 1.2)
-  x = matrix(0, n, p)
-  x[ind1] = 1
-  x[ind2] = 2
-  x[ind3] = 3
-  x[ind4] = 4
-  return(list(R = x, f = f, Lambda = Lambda, k = k, p = p))
 }
 
 
