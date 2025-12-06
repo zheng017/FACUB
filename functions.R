@@ -1,11 +1,8 @@
 library(mvnfast)
 
-MSE = function(a, b) {
-  mean((a-b)^2)
-}
-
-RMSE = function(a, b) {
-  sqrt(MSE(a, b))
+prob_feeling = function(m, r, csi) {
+  # csi can be a vector
+  choose(m-1, r-1) * csi^(m-r) * (1-csi)^(r-1)
 }
 
 prob_u = function(m, alpha) {
@@ -16,11 +13,6 @@ prob_u = function(m, alpha) {
     prob[r] = pbeta(b, alpha, alpha) - pbeta(a, alpha, alpha)
   }
   prob
-}
-
-prob_feeling = function(m, r, csi) {
-  # csi can be a vector
-  choose(m-1, r-1) * csi^(m-r) * (1-csi)^(r-1)
 }
 
 prob_uncertainty = function(m, r, alpha, islog = FALSE) {
@@ -1547,6 +1539,15 @@ FACAUB = function(R, x1=NULL, x2=NULL, m, n_factors, maxit = 200, trace = FALSE,
   out.list$e_mat = e_mat
   
   return(out.list)
+}
+
+
+MSE = function(a, b) {
+  mean((a-b)^2)
+}
+
+RMSE = function(a, b) {
+  sqrt(MSE(a, b))
 }
 
 
