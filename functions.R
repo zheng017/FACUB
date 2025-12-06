@@ -18,17 +18,145 @@ prob_u = function(m, alpha) {
   prob
 }
 
-generate_data_CAUB = function(n, m, pai, csi, alpha) {
-  # generate n samples of a ordinal variable, distributed from CAUB
-  # pai, csi, alpha are scalars, rather than vectors
-  # the output is a n dimensional vector of samples
-  z = sample(0:1, n, replace = TRUE, prob = c(1-pai, pai))
-  z_idx = which(z==1)
-  res = numeric(n)
-  res[z_idx] = rbinom(length(z_idx), m-1, 1-csi) + 1
-  res[setdiff(1:n, z_idx)] = sample(1:m, n-length(z_idx), replace = TRUE, prob = prob_u(m, alpha))
-  return(res)
+prob_feeling = function(m, r, csi) {
+  # csi can be a vector
+  choose(m-1, r-1) * csi^(m-r) * (1-csi)^(r-1)
 }
+
+prob_uncertainty = function(m, r, alpha, islog = FALSE) {
+  # alpha can be a vector
+  out = pbeta(r/m, alpha, alpha) - pbeta((r-1)/m, alpha, alpha)
+  out[out<=0] = 1e-08
+  if (islog) {
+    return(log(out))
+  } else {
+    return(out)
+  }
+}
+
+
+generate_data_FACUB = function(n, p, q, d, m, pai_param) {
+  b = rnorm(p)
+  Lambda = matrix(NA, p, d)  # 因子载荷矩阵Lambda pxd维矩阵，从均匀分布或标准正态中生成
+  for (i in 1:p) {
+    Lambda[i, ] = runif(d, -2, 2)
+  }
+  
+  f = matrix(NA, n, d)  # 因子f nxd维矩阵，从标准正态中生成
+  for (i in 1:n) {
+    f[i, ] = rnorm(d, 0, 1)
+  }
+  if (q == 0) {   # 没有协变量
+    x = NULL
+    beta = NULL
+    csi = plogis(matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda))
+  } else {
+    beta = matrix(rnorm(p*q), p, q)
+    x = matrix(rnorm(n*q), n, q)  
+    csi = plogis(matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda) + x %*% t(beta))
+  }
+  
+  pai = runif(p, pai_param[1], pai_param[2])   # CUB的参数pai
+  z = R = matrix(NA, n, p)
+  for (j in 1:p) {
+    z[, j] = sample(0:1, n, replace = TRUE, prob = c(1-pai[j], pai[j]))
+    z_idx = which(z[, j] == 1)
+    R[z_idx, j] = rbinom(length(z_idx), m-1, prob = 1-csi[z_idx, j]) + 1
+    z0_idx = setdiff(1:n, z_idx)
+    R[z0_idx, j] = sample(1:m, length(z0_idx), replace = TRUE, prob = rep(1/m, m))
+  }
+  pai_mat = matrix(pai, n, p, byrow = TRUE)
+  prob = pai_mat*prob_feeling(m, R, csi) + (1-pai_mat)/m
+  
+  return(list(R = R, x = x, beta = beta, pai = pai, Lambda = Lambda, f = f, B = b, csi = csi, prob = prob))
+}
+
+
+generate_data_FACUB2 = function(n, p, q, d, m, b0, pai_param1, pai_param2, type1="uniform", type2 = "identity") {
+  a = rep(0, n)  # 个体固定效应a_i, i=1,\dots,n
+  b = rep(b0, p)  # 变量的固定效应b_j, j=1,\dots,p
+  b = rnorm(p)
+  Lambda = matrix(NA, p, d)  # 因子载荷矩阵Lambda pxd维矩阵，从均匀分布或标准正态中生成
+  if (type1 == "uniform") {
+    for (i in 1:p) {
+      Lambda[i, ] = runif(d, -2, 2)
+    }
+  } else if (type1 == "gaussian") {
+    for (i in 1:p) {
+      Lambda[i, ] = rnorm(d, 0, 1)
+    }
+  }
+  
+  f = matrix(NA, n, d)  # 因子f nxd维矩阵，从标准正态中生成
+  for (i in 1:n) {
+    f[i, ] = rnorm(d, 0, 1)
+  }
+  if (q == 0) {   # 没有协变量
+    x = NULL
+    beta = NULL
+    csi = plogis(matrix(a, n, p) + matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda))
+  } else {
+    beta = matrix(rnorm(p*q), p, q)
+    if (type2 == "identity") {
+      x = matrix(rnorm(n*q), n, q)  
+    } else if (type2 == "exchange") {
+      rho = .3
+      Sigma = matrix(rho, q, q)
+      diag(Sigma) = rep(1, q)
+      x = mvrnorm(n, mu = rep(0, q), Sigma = Sigma)
+    }
+    csi = plogis(matrix(a, n, p) + matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda) + x %*% t(beta))
+  }
+  
+  # z2 = sample(0:1, p, replace=TRUE, prob=c(1/3,2/3))
+  # pai = numeric(p)
+  # pai[z2 == 0] = runif(length(which(z2 == 0)), pai_param1[1], pai_param1[2])
+  # pai[z2 == 1] = runif(length(which(z2 == 1)), pai_param2[1], pai_param2[2])
+  pai1 = runif(floor(p/3), pai_param1[1], pai_param1[2])   # CUB的参数pai
+  pai2 = runif(p-length(pai1), pai_param2[1], pai_param2[2])
+  pai = c(pai1, pai2)
+  z = R = matrix(NA, n, p)
+  for (j in 1:p) {
+    z[, j] = sample(0:1, n, replace = TRUE, prob = c(1-pai[j], pai[j]))
+    z_idx = which(z[, j] == 1)
+    R[z_idx, j] = rbinom(length(z_idx), m-1, prob = 1-csi[z_idx, j]) + 1
+    z0_idx = setdiff(1:n, z_idx)
+    R[z0_idx, j] = sample(1:m, length(z0_idx), replace = TRUE, prob = rep(1/m, m))
+  }
+  pai_mat = matrix(pai, n, p, byrow = TRUE)
+  prob = pai_mat*prob_feeling(m, R, csi) + (1-pai_mat)/m
+  # nk = numeric(n)
+  # for (i in 1:n) {
+  #   z[i, ] = rbinom(p, size = 1, prob = pai)
+  #   nk[i] = length(which(z[i, ] == 0))
+  #   for (j in 1:p) {
+  #     R[i, j] = rbinom(1, size = m-1, prob = 1 - csi[i, j]) + 1
+  #   }
+  #   R[i, z[i, ] == 0] = sample(1:m, nk[i], replace = TRUE, prob = rep(1/m, m))
+  # }
+  
+  return(list(R = R, x = x, beta = beta, pai = pai, Lambda = Lambda, f = f, A = a, B = b, csi = csi, prob = prob))
+}
+
+generate_initials = function(R, x, n.factors, B0=1, beta0=0, sigma0=0.01, pai0=0.5) {
+  n = nrow(R)
+  p = ncol(R)
+  q = ifelse(is.null(x), 1, ncol(x))
+  
+  R_norm = apply(R, 2, function(x) qnorm(rank(x) / (length(x) + 1)))
+  R_scaled = scale(R_norm)
+  re = svd(R_scaled, n.factors, n.factors)
+  mu = re$u * sqrt(n-1)
+  Lambda = re$v %*% diag(re$d[1:n.factors], nrow = n.factors) / sqrt(n-1)
+  
+  B = rep(B0, p)
+  beta = matrix(beta0, p, q)
+  sigma = matrix(sigma0, n, n.factors)
+  pai = rep(pai0, p)
+  alpha = matrix(pai, n, p, byrow = TRUE)
+  list(mu = mu, sigma = sigma, pai = pai, alpha = alpha, B = B, beta = beta, Lambda = Lambda)
+}
+
 
 generate_data_FACAUB = function(n, p, q, d, m, b0, pai_param, zeta, type1 = "uniform", type2 = "identity") {
   a = rep(0, n)
@@ -147,862 +275,6 @@ generate_data_FACAUB2 = function(n, p, q, d, m, b0, pai_param, zeta, type1 = "un
               prob = prob))
 }
 
-generate_data_CAUB_covariates = function(n, m, p, q, pai) {
-  # generate n samples from a ordinal variable, distributed from CAUB, 
-  # with csi and alpha modeled in a regression model with
-  # logit(csi) = x1 %*% beta1,
-  # log(alpha) = x2 %*% beta2.
-  # pai is a scalar, as we only consider one ordinal variable, and do not consider pai_i,
-  # that is, individual-specific pai.
-  x1 = cbind(rep(1, n), rmvn(n, rep(0, p-1), diag(p-1)))
-  x2 = cbind(rep(1, n), rmvn(n, rep(0, q-1), diag(q-1)))
-  beta1 = runif(p, 0, 2)
-  beta2 = runif(q, -.5, .5)
-  csi = plogis(x1 %*% beta1)
-  alpha = exp(x2 %*% beta2)
-  
-  z = sample(0:1, n, replace = TRUE, prob = c(1-pai, pai))
-  z_idx = which(z==1)
-  res = numeric(n)
-  res[z_idx] = rbinom(length(z_idx), m-1, 1-csi[z_idx]) + 1
-  z0_idx = setdiff(1:n, z_idx)
-  for (i in z0_idx) {
-    res[i] = sample(1:m, 1, replace = TRUE, prob = prob_u(m, alpha[i]))
-  }
-  prob = pai*prob_feeling(m, res, csi) + (1-pai)*prob_uncertainty(m, res, alpha)
-  return(list(data = res,
-              x1 = x1,
-              x2 = x2,
-              beta1 = beta1,
-              beta2 = beta2,
-              csi = csi,
-              alpha = alpha,
-              pai = pai,
-              prob = prob))
-}
-
-
-prob_feeling = function(m, r, csi) {
-  # csi can be a vector
-  choose(m-1, r-1) * csi^(m-r) * (1-csi)^(r-1)
-}
-
-prob_uncertainty = function(m, r, alpha, islog = FALSE) {
-  # alpha can be a vector
-  out = pbeta(r/m, alpha, alpha) - pbeta((r-1)/m, alpha, alpha)
-  out[out<=0] = 1e-08
-  if (islog) {
-    return(log(out))
-  } else {
-    return(out)
-  }
-}
-
-
-CAUB = function(r, m, iter = 1000, tol = 1e-3) {
-  pai_hat = pai_old = 0.5
-  csi_hat = csi_old = 0.5
-  alpha_hat = alpha_old = 1
-  count = 1
-  for (i in 1:iter) {
-    tau = pai_old * prob_feeling(m, r, csi_old) / (pai_old * prob_feeling(m, r, csi_old) + (1-pai_old) * prob_uncertainty(m, r, alpha_old))
-    pai_hat = mean(tau)
-    csi_hat = sum(tau*(m-r)) / ((m-1)*sum(tau))
-    fn = function(x) {
-      -sum((1-tau)*log(pbeta(r/m, x, x)-pbeta((r-1)/m, x, x)))
-    }
-    alpha_hat = optim(alpha_old, fn, method = "BFGS", lower = 1e-6)$par
-    if (abs(pai_hat-pai_old) < tol & abs(csi_hat-csi_old) < tol & abs(alpha_hat - alpha_old) < tol) break
-    
-    pai_old = pai_hat
-    alpha_old = alpha_hat
-    csi_old = csi_hat
-    count = count + 1
-  }
-  return(list(pai = pai_hat,
-              alpha = alpha_hat,
-              csi = csi_hat,
-              iter = count))
-}
-
-CAUB_covariates = function(r, m, x1, x2, iter = 1000, tol = 1e-3, grad = FALSE, type = "BFGS") {
-  p = ncol(x1)
-  q = ncol(x2)
-  pai_hat = pai_old = 0.5
-  beta1_old = rep(1, p)
-  beta2_old = runif(q, -.5, .5)
-  csi_old = plogis(x1 %*% beta1_old)
-  alpha_old = exp(x2 %*% beta2_old)
-  
-  count = 1
-  for (i in 1:iter) {
-    tau = pai_old * prob_feeling(m, r, csi_old) / (pai_old * prob_feeling(m, r, csi_old) + (1-pai_old) * prob_uncertainty(m, r, alpha_old))
-    pai_hat = mean(tau)
-    fn_beta = function(x) {
-      -sum( tau * ( (m-r) * (x1 %*% x) - (m-1)*log1p(exp(x1 %*% x)) ) )
-    }
-    gn_beta = function(x) {
-      -colSums(as.vector( tau * ( (m-r) - (m-1)*plogis(x1 %*% x) ) ) * x1)
-    }
-    beta1_hat = optim(beta1_old, fn_beta, gr = gn_beta, method = "BFGS")$par
-    csi_hat = plogis(x1 %*% beta1_hat)
-    
-    fn_beta2 = function(x) {
-      alpha_tmp = exp(x2 %*% x)
-      tmp = prob_uncertainty(m, r, alpha_tmp, islog = TRUE)
-      -sum( (1-tau) *  tmp )
-    }
-    # history = list()
-    # fn_beta2_debug = function(x) {
-    #   val = fn_beta2(x)
-    #   history <<- append(history, list(par = x, value = val))
-    #   val
-    # }
-    gn_beta2 = function(x) {
-      alpha_tmp = exp(x2 %*% x)
-      integral = integral2 = numeric(n)
-      for (i in 1:n) {
-        integral[i] = integrate(f = function(t) (t^(alpha_tmp[i]-1))*(1-t)^(alpha_tmp[i]-1)*log(t*(1-t)), lower = (r[i]-1)/m, upper = r[i]/m)$value
-        integral2[i] = integrate(f = function(t) (t^(alpha_tmp[i]-1))*(1-t)^(alpha_tmp[i]-1)*log(t*(1-t)), lower = 0, upper = 1)$value
-      }
-      tmp = prob_uncertainty(m, r, alpha_tmp)
-      tmp = tmp * beta(alpha_tmp, alpha_tmp)
-      tmp2 = beta(alpha_tmp, alpha_tmp)
-      -colSums(as.vector( (1-tau) * (integral / tmp - integral2 / tmp2) * alpha_tmp ) * x2)
-    }
-    if (grad) {
-      if (type == "BFGS") {
-        beta2_hat = optim(beta2_old, fn_beta2, gr = gn_beta2, method = "BFGS")$par
-      } else {
-        beta2_hat = optim(beta2_old, fn_beta2, gr = gn_beta2)$par
-      }
-    } else {
-      if (type == "BFGS") {
-        beta2_hat = optim(beta2_old, fn_beta2, method = "BFGS")$par
-      } else {
-        beta2_hat = optim(beta2_old, fn_beta2)$par
-      }
-      #print(history)
-      #print(sapply(history, function(x) is.nan(x$value) || any(is.nan(x$par))))
-    }
-    alpha_hat = exp(x2 %*% beta2_hat)
-    if (abs(pai_hat-pai_old) < tol & norm(csi_hat - csi_old, "2") < tol & norm(alpha_hat - alpha_old, "2") < tol) break
-    
-    pai_old = pai_hat
-    alpha_old = alpha_hat
-    csi_old = csi_hat
-    count = count + 1
-  }
-  prob = pai_hat*prob_feeling(m, r, csi_hat) + (1-pai)*prob_uncertainty(m, r, alpha_hat)
-  return(list(pai = pai_hat,
-              beta1 = beta1_hat,
-              beta2 = beta2_hat,
-              alpha = alpha_hat,
-              csi = csi_hat,
-              prob = prob,
-              iter = count))
-}
-
-MCUB = function(R, V=NULL, m, b0=rep(1,ncol(R)), beta0=matrix(1,ncol(R), ifelse(is.null(V), 1, ncol(V))), max.iter=200, toler=1e-4, trace=FALSE) {
-  # 使用EM算法来估计模型参数
-  n = nrow(R)
-  p = ncol(R)
-  if (is.null(V)) {
-    q = 1
-    X = matrix(0, n, q)
-  } else {
-    X = V
-    q = ncol(X)
-  }
-  
-  # Initialization
-  pai = new.pai = old.pai = rep(0.5, p)
-  B = new.B = old.B = b0
-  beta = new.beta = old.beta = beta0
-  
-  
-  Q_function = function(R, gamma, B, beta, pai) {
-    # E-step 完全数据的log似然求条件期望
-    # gamma为E[z|data,previous]
-    # 此函数也可视为关于优化B, beta的目标函数
-    # 这里输入的beta是pq*1维的向量
-    beta = matrix(beta, p, q)  # 把pq*1维向量转化成p*q矩阵
-    ll = matrix(B, n, p, byrow = TRUE) + X %*% t(beta)
-    #res = julia_call("compute_res_jl", n, m, R, pai, ll, gamma)
-    res = gamma*(log(matrix(pai, n, p, byrow = TRUE)) + log(choose(m-1, R-1)) + (m-R)*ll - (m-1)*log(1+exp(ll))) +
-      (1-gamma)*(log(matrix(1-pai, n, p, byrow = TRUE)) - log(m))
-    return(sum(res))
-  }
-  
-  gr_B = function(R, gamma, B, beta, pai) {
-    beta = matrix(beta, p, q)
-    ll = matrix(B, n, p, byrow = TRUE) + X %*% t(beta)
-    res = gamma*( m-R - (m-1)*exp(ll)/(1+exp(ll)) )
-    return(colSums(res))
-  }
-  
-  gr_beta = function(R, gamma, B, beta, pai) {
-    beta = matrix(beta, p, q)
-    ll = matrix(B, n, p, byrow = TRUE) + X %*% t(beta)
-    b2 = NULL
-    for (w in 1:q) {
-      b2 = c(b2, gamma*( sweep(m-R - (m-1)*exp(ll)/(1+exp(ll)), 1, X[, w], "*") ))
-    }
-    b2 = matrix(b2, n, p*q)
-    return(colSums(b2))
-  }
-  
-  # EM algorithm
-  iter = 1; b.cur.logfunc = beta.cur.logfunc = -1e6
-  while (iter <= max.iter) {
-    # E-step
-    # 计算gamma=E[z|data,previous]
-    ll = matrix(old.B, n, p, byrow = TRUE) + X %*% t(old.beta)
-    csi = plogis(ll)
-    fenzi = log(matrix(old.pai, n, p, byrow = TRUE)) + log(choose(m-1, R-1)) + (m-R)*log(csi) + (R-1)*log(1-csi+1e-8)
-    fenmu = exp(fenzi) + (matrix(1-old.pai, n, p, byrow = TRUE)) / m
-    gamma = exp(fenzi) / fenmu
-    
-    # M-step
-    # 更新pai
-    new.pai = colMeans(gamma)
-    # 更新B
-    qq = try(optim(old.B, fn = Q_function, gr = gr_B, R = R, gamma = gamma, beta = c(new.beta), pai = new.pai, method = "BFGS", control = list(trace=0, fnscale=-1, maxit=100)), silent = TRUE)
-    if ("try-error" %in% class(qq)) {
-      new.B = old.B
-    } else {
-      if (iter > 1 && b.cur.logfunc > qq$value) {
-        if (trace) {cat("Optimization of model coefs B did not improve on iteration step ", iter, "\n")}
-        new.B = old.B
-      } else {
-        if (trace) {cat("Model parameters updated", "\n")}
-        new.B = qq$par
-        if (qq$convergence != 0) {
-          if (trace) {cat("Optimization of model coefs B did not converge on iteration step ", iter, "\n")}
-        }
-      }
-    }
-    
-    if (!is.null(V)) {
-      # 更新beta
-      qq = try(optim(c(old.beta), fn = Q_function, gr = gr_beta, R = R, gamma = gamma, B = new.B, pai = new.pai, method = "BFGS", control = list(trace=0, fnscale=-1, maxit=100)), silent = TRUE)
-      if ("try-error" %in% class(qq)) {
-        new.beta = old.beta
-      } else {
-        if (iter > 1 && beta.cur.logfunc > qq$value) {
-          if (trace) {cat("Optimization of model coefs beta did not improve on iteration step ", iter, "\n")}
-          new.beta = old.beta
-        } else {
-          if (trace) {cat("Model parameters updated", "\n")}
-          new.beta = qq$par
-          new.beta = matrix(new.beta, p, q)
-          if (qq$convergence != 0) {
-            if (trace) {cat("Optimization of model coefs beta did not converge on iteration step ", iter, "\n")}
-          }
-        }
-      }
-    }
-    # 终止准则
-    tol1 = RMSE(new.pai, old.pai)
-    tol2 = RMSE(new.B, old.B)
-    tol3 = norm(new.beta - old.beta, "F")
-    if ( (tol1 < toler) && (tol2 < toler) && (tol3 < toler) ) break;
-    
-    old.pai = new.pai
-    old.B = new.B
-    old.beta = new.beta
-    b.cur.logfunc = beta.cur.logfunc = Q_function(R, gamma, new.B, c(new.beta), new.pai)
-    iter = iter + 1
-  }
-  
-  ll = matrix(new.B, n, p, byrow = TRUE) + X %*% t(new.beta)
-  
-  return(list(B = new.B, beta = new.beta, pai = new.pai, iter = iter-1, tol1 = tol1, tol2 = tol2, tol3 = tol3, csi = plogis(ll)))
-}
-
-
-check_R = function(R, m) {
-  if (m %% 2 == 1) {
-    left = 1:((m-1)/2)
-    right = ((m+1)/2+1):m
-  } else if (m %% 2 == 0) {
-    left = 1:(m/2)
-    right = (m/2+1):m
-  }
-  reorder = FALSE
-  freq = table(R)
-  if (sum(freq[left]) >= sum(freq[right])) {
-    R = m+1-R
-    reorder = TRUE
-  }
-  return(list(R = R,
-              reorder = reorder))
-}
-
-# no covariate
-FACAUB = function(R, x1=NULL, x2=NULL, m, n_factors, maxit = 200, trace = FALSE, init = NULL) {
-  n = nrow(R)
-  p = ncol(R)
-  # if covariates about csi included
-  if (is.null(x1)) {
-    q = 1
-    x1 = matrix(0, n, q)
-  } else {
-    q = ncol(x1)
-  }
-  
-  # initialization of parameters and variational parameters
-  R_scale = scale(log2(1+R), center = TRUE, scale = TRUE)
-  re = svd(R_scale, n_factors, n_factors)
-  if (n_factors == 1) {
-    mu = new_mu = re$u * (re$d[1])
-  } else {
-    mu = new_mu = re$u %*% diag(re$d[1:n_factors])  # nxn_factors dimension
-  }
-  Lambda = new_Lambda = re$v
-  B = new_B = rep(1, p)
-  beta = new_beta = matrix(1, p, q)
-  sigma = new_sigma = matrix(0.01, n, n_factors)  # nxn_factors dimension
-  pai = new_pai = rep(0.5, p)
-  alpha = new_alpha = matrix(pai, n, p, byrow = TRUE)
-  if (!is.null(init)) {
-    mu=new.mu=init$mu
-    sigma=new.sigma=init$sigma
-    B=new.B=init$B
-    beta=new.beta=init$beta
-    Lambda=new.Lambda=init$Lambda
-    pai=new.pai=init$pai
-    alpha=new.alpha=init$alpha
-  }
-  # parameters of discrete beta distribution in adjusted uncertainty term
-  # first assume that no covariates included in zeta, just as parameters pai.
-  zeta = new_zeta = rep(1, p)
-  
-  # VA iteration about variational lower bound
-  cur.VLB = -1e6; iter = 1; ratio = 10; diff = 1e5; eps = 1e-4; max.iter = 100;
-  m.cur.logfunc = -1e6; b.cur.logfunc = -1e6; d.cur.logfunc = -1e6; s.cur.logfunc = -1e6;
-  
-  while ( (diff > eps*(abs(cur.VLB)+eps)) && iter <= max.iter ) {
-    if (trace) cat("Iteration: ", iter, "\n")
-    
-    # variational lower bound
-    VLB = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
-      new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
-      new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
-      new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
-      model_coefs = model_coefs[-(1:(p*n_factors))]
-      new_B = model_coefs[1:p]
-      model_coefs = model_coefs[-(1:p)]
-      new_beta = matrix(model_coefs[1:(p*q)], p, q)
-      
-      new_zeta = zeta
-      new_pai = pai
-      new_alpha = alpha
-      
-      ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
-      e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
-      
-      fun1 = -0.5*( sum(new_sigma) + sum(new_mu^2) - sum(log(new_sigma)) )
-      fun2 = (new_alpha+1e-8) * log( matrix(new_pai+1e-8, n, p, byrow = TRUE) / (new_alpha+1e-8) ) + abs(1-new_alpha-1e-8) * log( matrix(abs(1-new_pai-1e-8), n, p, byrow = TRUE) / abs(1-new_alpha-1e-8) )
-      fun3 = new_alpha * ( log(choose(m-1, R-1)) + (m-R)*ll - (m-1)*log1p(exp(e_mat)) ) + (1-new_alpha)*prob_uncertainty(m, R, matrix(new_zeta, n, p, byrow = TRUE), islog=TRUE)
-      y = fun1 + sum(fun2) + sum(fun3)
-      y
-    }
-    
-    log_base = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
-      new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
-      new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
-      new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
-      model_coefs = model_coefs[-(1:(p*n_factors))]
-      new_B = model_coefs[1:p]
-      model_coefs = model_coefs[-(1:p)]
-      new_beta = matrix(model_coefs[1:(p*q)], p, q)
-      
-      new_zeta = zeta
-      new_pai = pai
-      new_alpha = alpha
-      
-      ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
-      e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
-      
-      y1 = new_alpha * ( log(choose(m-1, R-1)) + (m-R)*ll - (m-1)*log1p(exp(ll)) ) + (1-new_alpha)*prob_uncertainty(m, R, matrix(new_alpha, n, p, byrow = TRUE), islog=TRUE)
-      sum(y1)
-    }
-    
-    log_base2 = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
-      new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
-      new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
-      new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
-      model_coefs = model_coefs[-(1:(p*n_factors))]
-      new_B = model_coefs[1:p]
-      model_coefs = model_coefs[-(1:p)]
-      new_beta = matrix(model_coefs[1:(p*q)], p, q)
-      
-      new_zeta = zeta
-      new_pai = pai
-      new_alpha = alpha
-      
-      ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
-      e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
-      
-      y1 = new_alpha * ( log(choose(m-1, R-1)) + (m-R)*ll - (m-1)*log1p(exp(e_mat)) ) + (1-new_alpha)*prob_uncertainty(m, R, matrix(new_alpha, n, p, byrow = TRUE), islog=TRUE)
-      sum(y1)
-    }
-    
-    # update pai
-    new_pai = round(apply(new_alpha, 2, mean), 6)
-    # update model_coefs: B, Lambda
-    fn_model_coefs = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
-      new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
-      new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
-      new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
-      model_coefs = model_coefs[-(1:(p*n_factors))]
-      new_B = model_coefs[1:p]
-      model_coefs = model_coefs[-(1:p)]
-      new_beta = matrix(model_coefs[1:(p*q)], p, q)
-      
-      new_zeta = zeta
-      new_pai = pai
-      new_alpha = alpha
-      
-      ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
-      e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
-      y1 = new_alpha * (m-R) * ll
-      y2 = -(m-1)*new_alpha*log1p(exp(e_mat))
-      sum(y1) + sum(y2)
-    }
-    
-    gr_model_coefs = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
-      new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
-      new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
-      new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
-      model_coefs = model_coefs[-(1:(p*n_factors))]
-      new_B = model_coefs[1:p]
-      model_coefs = model_coefs[-(1:p)]
-      new_beta = matrix(model_coefs[1:(p*q)], p, q)
-      
-      new_zeta = zeta
-      new_pai = pai
-      new_alpha = alpha
-      
-      ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
-      e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
-      b1 = new_alpha * (m-R) - (m-1)*new_alpha*plogis(e_mat)
-      b2 = NULL
-      for (w in 1:n_factors) {
-        b2 = c(b2, new_alpha*( sweep(m-R, 1, new_mu[, w], "*") - (m-1)*sweep((new_sigma[, w]%*%t(new_Lambda[, w])), 1, new_mu[, w], "+")*plogis(e_mat) ))
-      }
-      b2 = matrix(b2, n, p*n_factors)
-      b3 = NULL
-      for (w in 1:q) {
-        b3 = c(b3, new_alpha*( sweep(m-R - (m-1)*plogis(e_mat), 1, x1[, w], "*") ))
-      }
-      b3 = matrix(b3, n, p*q)
-      return(c(colSums(b2), colSums(b1), colSums(b3)))
-    }
-    
-    qq = try(optim(c(Lambda, B, beta), fn = fn_model_coefs, gr = gr_model_coefs, method = "BFGS", va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta, control = list(trace = 0, fnscale = -1, maxit = maxit)), silent = TRUE)
-    if ("try-error" %in% class(qq)) {
-      new_Lambda = Lambda
-      new_B = B
-      new_beta = beta
-    } else {
-      if (iter > 1 && b.cur.logfunc > qq$value) {
-        if (trace) {cat("Optimization of model coefs did not improve on iteration step ", iter, "\n")}
-        new_Lambda = Lambda
-        new_B = B
-        new_beta = beta
-      } else {
-        if (trace) {cat("Model parameters updated", "\n")}
-        new_Lambda = matrix(qq$par[1:(p*n_factors)], p, n_factors)
-        qq$par = qq$par[-(1:(p*n_factors))]
-        new_B = qq$par[1:p]
-        qq$par = qq$par[-(1:p)]
-        new_beta = matrix(qq$par[1:(p*q)], p, q)
-        if (qq$convergence != 0) {
-          if (trace) {
-            cat("Optimization of model coefs did not converge on iteration step ", iter, "\n")
-          }
-        }
-      }
-    }
-    
-    fn_zeta = function(x, alpha, idx) {
-      -sum( (1-alpha[, idx]) * prob_uncertainty(m, R[, idx], x, islog = TRUE) )
-    }
-    for (j in 1:p) {
-      new_zeta[j] = optim(zeta[j], fn_zeta, alpha = new_alpha, idx = j, method = "BFGS", lower = 1e-6)$par
-    }
-    
-    # fn_zeta = function(x, alpha) {
-    #   -sum( (1-alpha)*prob_uncertainty(m, R, matrix(x, n, p, byrow = TRUE), islog=TRUE) )
-    # }
-    # 
-    # new_zeta = optim(zeta, fn_zeta, alpha = new_alpha, method = "L-BFGS-B", lower = rep(1e-6, p))$par
-    
-    # update variational parameter
-    delta.alpha.required = 1e-3; p.iter = 1; p.max.iter = 10; delta.alpha = abs(alpha)
-    while (!all(delta.alpha < delta.alpha.required) & (p.iter < p.max.iter)) {
-      # update alpha
-      ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
-      e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
-      pai_mat = matrix(new_pai, n, p, byrow = TRUE)
-      new_alpha = plogis( log(pai_mat / (1-pai_mat)) + log(choose(m-1, R-1)) + (m-R)*ll - (m-1)*log1p(exp(e_mat)) - prob_uncertainty(m, R, matrix(new_zeta, n, p, byrow = TRUE), islog=TRUE))
-      
-      # update sigma
-      fn_va_sigma = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
-        new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
-        new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
-        new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
-        model_coefs = model_coefs[-(1:(p*n_factors))]
-        new_B = model_coefs[1:p]
-        model_coefs = model_coefs[-(1:p)]
-        new_beta = matrix(model_coefs[1:(p*q)], p, q)
-        
-        new_zeta = zeta
-        new_pai = pai
-        new_alpha = alpha
-        
-        ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
-        e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
-        y1 = -0.5*( sum(new_sigma) - sum(log(new_sigma)) )
-        y2 = -(m-1)*new_alpha*log1p(exp(e_mat))
-        y = y1 + sum(y2)
-        return(y)
-      }
-      
-      gr_va_sigma = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
-        new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
-        new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
-        new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
-        model_coefs = model_coefs[-(1:(p*n_factors))]
-        new_B = model_coefs[1:p]
-        model_coefs = model_coefs[-(1:p)]
-        new_beta = matrix(model_coefs[1:(p*q)], p, q)
-        
-        new_zeta = zeta
-        new_pai = pai
-        new_alpha = alpha
-        
-        ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
-        e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
-        beta2 = new_Lambda^2
-        mu_mat = -(m-1)*new_alpha*plogis(e_mat)
-        
-        grad.sigma = matrix(NA, n, n_factors)
-        if (n_factors == 1) {
-          grad.sigma[i, ] = -0.5*(1 - new_sigma[i, ]^(-1)) + apply(mu_mat[i, ]*beta2, 2, sum)
-        } else {
-          for (i in 1:n) {
-            grad.sigma[i, ] = diag(-0.5*(diag(rep(1, n_factors)) - (diag(new_sigma[i, ]))^(-1)) + diag(apply(mu_mat[i, ]*beta2, 2, sum)))
-          }
-        }
-        return(c(grad.sigma))
-      }
-      
-      qq = try(constrOptim(c(sigma), method = "BFGS", f = fn_va_sigma, gr = gr_va_sigma, model_coefs = c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), pai = new_pai, alpha = new_alpha, zeta = new_zeta, ui = diag(1, n*n_factors, n*n_factors), ci = rep(1e-8, n*n_factors), control = list(trace = 0, fnscale = -1, maxit = maxit, reltol = 1e-6)), silent = TRUE)
-      if ("try-error" %in% class(qq)) {
-        new_sigma = sigma
-      } else {
-        if (iter > 1 && s.cur.logfunc > qq$value) {
-          if (trace) {cat("Optimization of sigma did not improve on iteration step ", iter, "\n")}
-          new_sigma = sigma
-        } else {
-          if (trace) {cat("Variational parameters sigma updated", "\n")}
-          new_sigma = matrix(qq$par, n, n_factors)
-          if (qq$convergence != 0) {
-            if (trace) {
-              cat("Optimization of sigma did not converge on iteration step ", iter, "\n")
-            }
-          }
-        }
-      }
-      
-      # update mu
-      fn_va_mu = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
-        new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
-        new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
-        new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
-        model_coefs = model_coefs[-(1:(p*n_factors))]
-        new_B = model_coefs[1:p]
-        model_coefs = model_coefs[-(1:p)]
-        new_beta = matrix(model_coefs[1:(p*q)], p, q)
-        
-        new_zeta = zeta
-        new_pai = pai
-        new_alpha = alpha
-        
-        ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
-        e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
-        
-        fun1 = -0.5* sum(new_mu^2)
-        fun2 = new_alpha * ( (m-R)*new_mu %*% t(new_Lambda) - (m-1)*log1p(exp(e_mat)) )
-        y = fun1 + sum(fun2) 
-        y
-      }
-      
-      gr_va_mu = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
-        new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
-        new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
-        new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
-        model_coefs = model_coefs[-(1:(p*n_factors))]
-        new_B = model_coefs[1:p]
-        model_coefs = model_coefs[-(1:p)]
-        new_beta = matrix(model_coefs[1:(p*q)], p, q)
-        
-        new_zeta = zeta
-        new_pai = pai
-        new_alpha = alpha
-        
-        ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
-        e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
-        grad.m = NULL
-        sum1 = new_alpha*( (m-R)-(m-1)*plogis(e_mat) )
-        for (w in 1:n_factors) {
-          grad.m = c(grad.m, rowSums(sweep(sum1, 2, new_Lambda[, w], "*")) - new_mu[, w])
-        }
-        return(c(grad.m))
-      }
-      
-      qq = try(optim(c(mu), method = "BFGS", fn = fn_va_mu, gr = gr_va_mu, model_coefs = c(new_Lambda, new_B, new_beta), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta, control = list(trace = 0, fnscale = -1, maxit = maxit, reltol = 1e-6)), silent = TRUE)
-      if ("try-error" %in% class(qq)) {
-        new_mu = mu
-      } else {
-        if (iter > 1 && m.cur.logfunc > qq$value) {
-          if (trace) {cat("Optimization of mu did not improve on iteration step ", iter, "\n")}
-          new_mu = mu
-        } else {
-          if (trace) {cat("Variational parameters mu updated", "\n")}
-          new_mu = matrix(qq$par, n, n_factors)
-          if (qq$convergence != 0) {
-            if (trace) {
-              cat("Optimization of mu did not converge on iteration step ", iter, "\n")
-            }
-          }
-        }
-      }
-      
-      q_m = list(value = fn_va_mu(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta))
-      m.new.logfunc = q_m$value
-      m.cur.logfunc = m.new.logfunc
-      
-      q_s = list(value = fn_va_sigma(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta))
-      s.new.logfunc = q_s$value
-      s.cur.logfunc = s.new.logfunc
-      
-      delta.alpha = abs(new_alpha - alpha)
-      sigma = new_sigma
-      mu = new_mu
-      alpha = new_alpha
-      pai = new_pai
-      p.iter = p.iter + 1
-      
-    }
-    
-    q_b = list(value = fn_model_coefs(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta))
-    b.new.logfunc = q_b$value
-    b.cur.logfunc = b.new.logfunc
-    
-    # Take values of VLB to define stopping rule
-    qq = list(value = VLB(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta))
-    new.VLB = qq$value
-    diff = abs(new.VLB - cur.VLB)
-    ratio = abs(new.VLB / cur.VLB)
-    if (trace) cat("New VLB: ", new.VLB, "cur VLB: ", cur.VLB, "Ratio of VLB: ", ratio, ". Difference in VLB: ", diff, "\n")
-    if (trace) cat("\nThe current evaluate results: ", evaluate_recovery(promax(new.Lambda)$loadings,promax(data$Lambda)$loadings))
-    cur.VLB = new.VLB
-    
-    qq = list(value = log_base(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta))
-    cur.log = qq$value
-    
-    EE = log_base2(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta)
-    EN2 = 2*cur.log - 2*EE
-    
-    
-    pai = new_pai
-    alpha = new_alpha
-    B = new_B
-    Lambda = new_Lambda
-    mu = new_mu
-    sigma = new_sigma
-    zeta = new_zeta
-    
-    iter = iter + 1
-  }
-  if (iter > 99) {
-    print("FACAUB not converging!")
-  }
-  
-  ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
-  e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
-  
-  if (is.null(x1)) beta = NULL
-  ll = plogis(ll)
-  e_mat = plogis(e_mat)
-  
-  out.list = list()
-  out.list$VLB = cur.VLB
-  out.list$EE = EE
-  out.list$lob = cur.log
-  out.list$EN2 = EN2
-  out.list$iter = iter - 1
-  out.list$lvs$alpha = new_alpha
-  out.list$lvs$mu = new_mu
-  out.list$lvs$sigma = new_sigma
-  out.list$params$pai = new_pai
-  out.list$params$B = new_B
-  out.list$params$Lambda = new_Lambda
-  out.list$params$beta = new_beta
-  out.list$params$zeta = new_zeta
-  out.list$ll = ll
-  out.list$e_mat = e_mat
-  
-  return(out.list)
-}
-
-#Vector and trace correlation coefficients (Ye and Weiss, JASA, 2003)
-eval.space <- function(A, B, orthnm = TRUE) 
-{
-  if(!is.matrix(A)) A <- as.matrix(A)
-  if(!is.matrix(B)) B <- as.matrix(B)
-  
-  if(orthnm)
-  { 
-    A <- qr.Q(qr(A))
-    B <- qr.Q(qr(B)) 
-  }
-  
-  mat <- t(B) %*% A %*% t(A) %*% B
-  d <- eigen(mat)$values
-  d <- (d + abs(d))/2
-  q <- sqrt(prod(d))
-  r <- sqrt(mean(d))
-  
-  c(q, r, acos(q))
-}
-
-
-generate_data_FACUB = function(n, p, q, d, m, pai_param) {
-  b = rnorm(p)
-  Lambda = matrix(NA, p, d)  # 因子载荷矩阵Lambda pxd维矩阵，从均匀分布或标准正态中生成
-  for (i in 1:p) {
-    Lambda[i, ] = runif(d, -2, 2)
-  }
-  
-  f = matrix(NA, n, d)  # 因子f nxd维矩阵，从标准正态中生成
-  for (i in 1:n) {
-    f[i, ] = rnorm(d, 0, 1)
-  }
-  if (q == 0) {   # 没有协变量
-    x = NULL
-    beta = NULL
-    csi = plogis(matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda))
-  } else {
-    beta = matrix(rnorm(p*q), p, q)
-    x = matrix(rnorm(n*q), n, q)  
-    csi = plogis(matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda) + x %*% t(beta))
-  }
-  
-  pai = runif(p, pai_param[1], pai_param[2])   # CUB的参数pai
-  z = R = matrix(NA, n, p)
-  for (j in 1:p) {
-    z[, j] = sample(0:1, n, replace = TRUE, prob = c(1-pai[j], pai[j]))
-    z_idx = which(z[, j] == 1)
-    R[z_idx, j] = rbinom(length(z_idx), m-1, prob = 1-csi[z_idx, j]) + 1
-    z0_idx = setdiff(1:n, z_idx)
-    R[z0_idx, j] = sample(1:m, length(z0_idx), replace = TRUE, prob = rep(1/m, m))
-  }
-  pai_mat = matrix(pai, n, p, byrow = TRUE)
-  prob = pai_mat*prob_feeling(m, R, csi) + (1-pai_mat)/m
-  
-  return(list(R = R, x = x, beta = beta, pai = pai, Lambda = Lambda, f = f, B = b, csi = csi, prob = prob))
-}
-
-
-generate_data_FACUB2 = function(n, p, q, d, m, b0, pai_param1, pai_param2, type1="uniform", type2 = "identity") {
-  a = rep(0, n)  # 个体固定效应a_i, i=1,\dots,n
-  b = rep(b0, p)  # 变量的固定效应b_j, j=1,\dots,p
-  b = rnorm(p)
-  Lambda = matrix(NA, p, d)  # 因子载荷矩阵Lambda pxd维矩阵，从均匀分布或标准正态中生成
-  if (type1 == "uniform") {
-    for (i in 1:p) {
-      Lambda[i, ] = runif(d, -2, 2)
-    }
-  } else if (type1 == "gaussian") {
-    for (i in 1:p) {
-      Lambda[i, ] = rnorm(d, 0, 1)
-    }
-  }
-  
-  f = matrix(NA, n, d)  # 因子f nxd维矩阵，从标准正态中生成
-  for (i in 1:n) {
-    f[i, ] = rnorm(d, 0, 1)
-  }
-  if (q == 0) {   # 没有协变量
-    x = NULL
-    beta = NULL
-    csi = plogis(matrix(a, n, p) + matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda))
-  } else {
-    beta = matrix(rnorm(p*q), p, q)
-    if (type2 == "identity") {
-      x = matrix(rnorm(n*q), n, q)  
-    } else if (type2 == "exchange") {
-      rho = .3
-      Sigma = matrix(rho, q, q)
-      diag(Sigma) = rep(1, q)
-      x = mvrnorm(n, mu = rep(0, q), Sigma = Sigma)
-    }
-    csi = plogis(matrix(a, n, p) + matrix(b, n, p, byrow = TRUE) + f %*% t(Lambda) + x %*% t(beta))
-  }
-  
-  # z2 = sample(0:1, p, replace=TRUE, prob=c(1/3,2/3))
-  # pai = numeric(p)
-  # pai[z2 == 0] = runif(length(which(z2 == 0)), pai_param1[1], pai_param1[2])
-  # pai[z2 == 1] = runif(length(which(z2 == 1)), pai_param2[1], pai_param2[2])
-  pai1 = runif(floor(p/3), pai_param1[1], pai_param1[2])   # CUB的参数pai
-  pai2 = runif(p-length(pai1), pai_param2[1], pai_param2[2])
-  pai = c(pai1, pai2)
-  z = R = matrix(NA, n, p)
-  for (j in 1:p) {
-    z[, j] = sample(0:1, n, replace = TRUE, prob = c(1-pai[j], pai[j]))
-    z_idx = which(z[, j] == 1)
-    R[z_idx, j] = rbinom(length(z_idx), m-1, prob = 1-csi[z_idx, j]) + 1
-    z0_idx = setdiff(1:n, z_idx)
-    R[z0_idx, j] = sample(1:m, length(z0_idx), replace = TRUE, prob = rep(1/m, m))
-  }
-  pai_mat = matrix(pai, n, p, byrow = TRUE)
-  prob = pai_mat*prob_feeling(m, R, csi) + (1-pai_mat)/m
-  # nk = numeric(n)
-  # for (i in 1:n) {
-  #   z[i, ] = rbinom(p, size = 1, prob = pai)
-  #   nk[i] = length(which(z[i, ] == 0))
-  #   for (j in 1:p) {
-  #     R[i, j] = rbinom(1, size = m-1, prob = 1 - csi[i, j]) + 1
-  #   }
-  #   R[i, z[i, ] == 0] = sample(1:m, nk[i], replace = TRUE, prob = rep(1/m, m))
-  # }
-  
-  return(list(R = R, x = x, beta = beta, pai = pai, Lambda = Lambda, f = f, A = a, B = b, csi = csi, prob = prob))
-}
-
-generate_initials = function(R, x, n.factors, B0=1, beta0=0, sigma0=0.01, pai0=0.5) {
-  n = nrow(R)
-  p = ncol(R)
-  q = ifelse(is.null(x), 1, ncol(x))
-
-  R_norm = apply(R, 2, function(x) qnorm(rank(x) / (length(x) + 1)))
-  R_scaled = scale(R_norm)
-  re = svd(R_scaled, n.factors, n.factors)
-  mu = re$u * sqrt(n-1)
-  Lambda = re$v %*% diag(re$d[1:n.factors], nrow = n.factors) / sqrt(n-1)
-  
-  B = rep(B0, p)
-  beta = matrix(beta0, p, q)
-  sigma = matrix(sigma0, n, n.factors)
-  pai = rep(pai0, p)
-  alpha = matrix(pai, n, p, byrow = TRUE)
-  list(mu = mu, sigma = sigma, pai = pai, alpha = alpha, B = B, beta = beta, Lambda = Lambda)
-}
 
 FAVA_new = function(R, V=NULL, m, n.factors, initials, maxit=200, trace=FALSE) {
   #newR = check_R(R, m)
@@ -1857,13 +1129,446 @@ FAVA_new2 = function(R, V=NULL, m, n.factors, initials, maxit=200, trace=FALSE) 
 }
 
 
-error = function(a, b) {
-  proj_a = a %*% MASS::ginv(t(a)%*%a) %*% t(a)
-  proj_b = b %*% MASS::ginv(t(b)%*%b) %*% t(b)
-  error1 = vegan::procrustes(a, b, symmetric = TRUE)$ss   # procrustes error
-  error2 = Matrix::norm(proj_a - proj_b, "2")      # projection error
+FACAUB = function(R, x1=NULL, x2=NULL, m, n_factors, maxit = 200, trace = FALSE, init = NULL) {
+  n = nrow(R)
+  p = ncol(R)
+  # if covariates about csi included
+  if (is.null(x1)) {
+    q = 1
+    x1 = matrix(0, n, q)
+  } else {
+    q = ncol(x1)
+  }
   
-  return(c(error1, error2))
+  # initialization of parameters and variational parameters
+  R_scale = scale(log2(1+R), center = TRUE, scale = TRUE)
+  re = svd(R_scale, n_factors, n_factors)
+  if (n_factors == 1) {
+    mu = new_mu = re$u * (re$d[1])
+  } else {
+    mu = new_mu = re$u %*% diag(re$d[1:n_factors])  # nxn_factors dimension
+  }
+  Lambda = new_Lambda = re$v
+  B = new_B = rep(1, p)
+  beta = new_beta = matrix(1, p, q)
+  sigma = new_sigma = matrix(0.01, n, n_factors)  # nxn_factors dimension
+  pai = new_pai = rep(0.5, p)
+  alpha = new_alpha = matrix(pai, n, p, byrow = TRUE)
+  if (!is.null(init)) {
+    mu=new.mu=init$mu
+    sigma=new.sigma=init$sigma
+    B=new.B=init$B
+    beta=new.beta=init$beta
+    Lambda=new.Lambda=init$Lambda
+    pai=new.pai=init$pai
+    alpha=new.alpha=init$alpha
+  }
+  # parameters of discrete beta distribution in adjusted uncertainty term
+  # first assume that no covariates included in zeta, just as parameters pai.
+  zeta = new_zeta = rep(1, p)
+  
+  # VA iteration about variational lower bound
+  cur.VLB = -1e6; iter = 1; ratio = 10; diff = 1e5; eps = 1e-4; max.iter = 100;
+  m.cur.logfunc = -1e6; b.cur.logfunc = -1e6; d.cur.logfunc = -1e6; s.cur.logfunc = -1e6;
+  
+  while ( (diff > eps*(abs(cur.VLB)+eps)) && iter <= max.iter ) {
+    if (trace) cat("Iteration: ", iter, "\n")
+    
+    # variational lower bound
+    VLB = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
+      new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
+      new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
+      new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
+      model_coefs = model_coefs[-(1:(p*n_factors))]
+      new_B = model_coefs[1:p]
+      model_coefs = model_coefs[-(1:p)]
+      new_beta = matrix(model_coefs[1:(p*q)], p, q)
+      
+      new_zeta = zeta
+      new_pai = pai
+      new_alpha = alpha
+      
+      ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
+      e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
+      
+      fun1 = -0.5*( sum(new_sigma) + sum(new_mu^2) - sum(log(new_sigma)) )
+      fun2 = (new_alpha+1e-8) * log( matrix(new_pai+1e-8, n, p, byrow = TRUE) / (new_alpha+1e-8) ) + abs(1-new_alpha-1e-8) * log( matrix(abs(1-new_pai-1e-8), n, p, byrow = TRUE) / abs(1-new_alpha-1e-8) )
+      fun3 = new_alpha * ( log(choose(m-1, R-1)) + (m-R)*ll - (m-1)*log1p(exp(e_mat)) ) + (1-new_alpha)*prob_uncertainty(m, R, matrix(new_zeta, n, p, byrow = TRUE), islog=TRUE)
+      y = fun1 + sum(fun2) + sum(fun3)
+      y
+    }
+    
+    log_base = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
+      new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
+      new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
+      new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
+      model_coefs = model_coefs[-(1:(p*n_factors))]
+      new_B = model_coefs[1:p]
+      model_coefs = model_coefs[-(1:p)]
+      new_beta = matrix(model_coefs[1:(p*q)], p, q)
+      
+      new_zeta = zeta
+      new_pai = pai
+      new_alpha = alpha
+      
+      ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
+      e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
+      
+      y1 = new_alpha * ( log(choose(m-1, R-1)) + (m-R)*ll - (m-1)*log1p(exp(ll)) ) + (1-new_alpha)*prob_uncertainty(m, R, matrix(new_alpha, n, p, byrow = TRUE), islog=TRUE)
+      sum(y1)
+    }
+    
+    log_base2 = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
+      new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
+      new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
+      new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
+      model_coefs = model_coefs[-(1:(p*n_factors))]
+      new_B = model_coefs[1:p]
+      model_coefs = model_coefs[-(1:p)]
+      new_beta = matrix(model_coefs[1:(p*q)], p, q)
+      
+      new_zeta = zeta
+      new_pai = pai
+      new_alpha = alpha
+      
+      ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
+      e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
+      
+      y1 = new_alpha * ( log(choose(m-1, R-1)) + (m-R)*ll - (m-1)*log1p(exp(e_mat)) ) + (1-new_alpha)*prob_uncertainty(m, R, matrix(new_alpha, n, p, byrow = TRUE), islog=TRUE)
+      sum(y1)
+    }
+    
+    # update pai
+    new_pai = round(apply(new_alpha, 2, mean), 6)
+    # update model_coefs: B, Lambda
+    fn_model_coefs = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
+      new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
+      new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
+      new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
+      model_coefs = model_coefs[-(1:(p*n_factors))]
+      new_B = model_coefs[1:p]
+      model_coefs = model_coefs[-(1:p)]
+      new_beta = matrix(model_coefs[1:(p*q)], p, q)
+      
+      new_zeta = zeta
+      new_pai = pai
+      new_alpha = alpha
+      
+      ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
+      e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
+      y1 = new_alpha * (m-R) * ll
+      y2 = -(m-1)*new_alpha*log1p(exp(e_mat))
+      sum(y1) + sum(y2)
+    }
+    
+    gr_model_coefs = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
+      new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
+      new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
+      new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
+      model_coefs = model_coefs[-(1:(p*n_factors))]
+      new_B = model_coefs[1:p]
+      model_coefs = model_coefs[-(1:p)]
+      new_beta = matrix(model_coefs[1:(p*q)], p, q)
+      
+      new_zeta = zeta
+      new_pai = pai
+      new_alpha = alpha
+      
+      ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
+      e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
+      b1 = new_alpha * (m-R) - (m-1)*new_alpha*plogis(e_mat)
+      b2 = NULL
+      for (w in 1:n_factors) {
+        b2 = c(b2, new_alpha*( sweep(m-R, 1, new_mu[, w], "*") - (m-1)*sweep((new_sigma[, w]%*%t(new_Lambda[, w])), 1, new_mu[, w], "+")*plogis(e_mat) ))
+      }
+      b2 = matrix(b2, n, p*n_factors)
+      b3 = NULL
+      for (w in 1:q) {
+        b3 = c(b3, new_alpha*( sweep(m-R - (m-1)*plogis(e_mat), 1, x1[, w], "*") ))
+      }
+      b3 = matrix(b3, n, p*q)
+      return(c(colSums(b2), colSums(b1), colSums(b3)))
+    }
+    
+    qq = try(optim(c(Lambda, B, beta), fn = fn_model_coefs, gr = gr_model_coefs, method = "BFGS", va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta, control = list(trace = 0, fnscale = -1, maxit = maxit)), silent = TRUE)
+    if ("try-error" %in% class(qq)) {
+      new_Lambda = Lambda
+      new_B = B
+      new_beta = beta
+    } else {
+      if (iter > 1 && b.cur.logfunc > qq$value) {
+        if (trace) {cat("Optimization of model coefs did not improve on iteration step ", iter, "\n")}
+        new_Lambda = Lambda
+        new_B = B
+        new_beta = beta
+      } else {
+        if (trace) {cat("Model parameters updated", "\n")}
+        new_Lambda = matrix(qq$par[1:(p*n_factors)], p, n_factors)
+        qq$par = qq$par[-(1:(p*n_factors))]
+        new_B = qq$par[1:p]
+        qq$par = qq$par[-(1:p)]
+        new_beta = matrix(qq$par[1:(p*q)], p, q)
+        if (qq$convergence != 0) {
+          if (trace) {
+            cat("Optimization of model coefs did not converge on iteration step ", iter, "\n")
+          }
+        }
+      }
+    }
+    
+    fn_zeta = function(x, alpha, idx) {
+      -sum( (1-alpha[, idx]) * prob_uncertainty(m, R[, idx], x, islog = TRUE) )
+    }
+    for (j in 1:p) {
+      new_zeta[j] = optim(zeta[j], fn_zeta, alpha = new_alpha, idx = j, method = "BFGS", lower = 1e-6)$par
+    }
+    
+    # fn_zeta = function(x, alpha) {
+    #   -sum( (1-alpha)*prob_uncertainty(m, R, matrix(x, n, p, byrow = TRUE), islog=TRUE) )
+    # }
+    # 
+    # new_zeta = optim(zeta, fn_zeta, alpha = new_alpha, method = "L-BFGS-B", lower = rep(1e-6, p))$par
+    
+    # update variational parameter
+    delta.alpha.required = 1e-3; p.iter = 1; p.max.iter = 10; delta.alpha = abs(alpha)
+    while (!all(delta.alpha < delta.alpha.required) & (p.iter < p.max.iter)) {
+      # update alpha
+      ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
+      e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
+      pai_mat = matrix(new_pai, n, p, byrow = TRUE)
+      new_alpha = plogis( log(pai_mat / (1-pai_mat)) + log(choose(m-1, R-1)) + (m-R)*ll - (m-1)*log1p(exp(e_mat)) - prob_uncertainty(m, R, matrix(new_zeta, n, p, byrow = TRUE), islog=TRUE))
+      
+      # update sigma
+      fn_va_sigma = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
+        new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
+        new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
+        new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
+        model_coefs = model_coefs[-(1:(p*n_factors))]
+        new_B = model_coefs[1:p]
+        model_coefs = model_coefs[-(1:p)]
+        new_beta = matrix(model_coefs[1:(p*q)], p, q)
+        
+        new_zeta = zeta
+        new_pai = pai
+        new_alpha = alpha
+        
+        ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
+        e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
+        y1 = -0.5*( sum(new_sigma) - sum(log(new_sigma)) )
+        y2 = -(m-1)*new_alpha*log1p(exp(e_mat))
+        y = y1 + sum(y2)
+        return(y)
+      }
+      
+      gr_va_sigma = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
+        new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
+        new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
+        new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
+        model_coefs = model_coefs[-(1:(p*n_factors))]
+        new_B = model_coefs[1:p]
+        model_coefs = model_coefs[-(1:p)]
+        new_beta = matrix(model_coefs[1:(p*q)], p, q)
+        
+        new_zeta = zeta
+        new_pai = pai
+        new_alpha = alpha
+        
+        ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
+        e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
+        beta2 = new_Lambda^2
+        mu_mat = -(m-1)*new_alpha*plogis(e_mat)
+        
+        grad.sigma = matrix(NA, n, n_factors)
+        if (n_factors == 1) {
+          grad.sigma[i, ] = -0.5*(1 - new_sigma[i, ]^(-1)) + apply(mu_mat[i, ]*beta2, 2, sum)
+        } else {
+          for (i in 1:n) {
+            grad.sigma[i, ] = diag(-0.5*(diag(rep(1, n_factors)) - (diag(new_sigma[i, ]))^(-1)) + diag(apply(mu_mat[i, ]*beta2, 2, sum)))
+          }
+        }
+        return(c(grad.sigma))
+      }
+      
+      qq = try(constrOptim(c(sigma), method = "BFGS", f = fn_va_sigma, gr = gr_va_sigma, model_coefs = c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), pai = new_pai, alpha = new_alpha, zeta = new_zeta, ui = diag(1, n*n_factors, n*n_factors), ci = rep(1e-8, n*n_factors), control = list(trace = 0, fnscale = -1, maxit = maxit, reltol = 1e-6)), silent = TRUE)
+      if ("try-error" %in% class(qq)) {
+        new_sigma = sigma
+      } else {
+        if (iter > 1 && s.cur.logfunc > qq$value) {
+          if (trace) {cat("Optimization of sigma did not improve on iteration step ", iter, "\n")}
+          new_sigma = sigma
+        } else {
+          if (trace) {cat("Variational parameters sigma updated", "\n")}
+          new_sigma = matrix(qq$par, n, n_factors)
+          if (qq$convergence != 0) {
+            if (trace) {
+              cat("Optimization of sigma did not converge on iteration step ", iter, "\n")
+            }
+          }
+        }
+      }
+      
+      # update mu
+      fn_va_mu = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
+        new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
+        new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
+        new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
+        model_coefs = model_coefs[-(1:(p*n_factors))]
+        new_B = model_coefs[1:p]
+        model_coefs = model_coefs[-(1:p)]
+        new_beta = matrix(model_coefs[1:(p*q)], p, q)
+        
+        new_zeta = zeta
+        new_pai = pai
+        new_alpha = alpha
+        
+        ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
+        e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
+        
+        fun1 = -0.5* sum(new_mu^2)
+        fun2 = new_alpha * ( (m-R)*new_mu %*% t(new_Lambda) - (m-1)*log1p(exp(e_mat)) )
+        y = fun1 + sum(fun2) 
+        y
+      }
+      
+      gr_va_mu = function(model_coefs, va_mu, va_sigma, pai, alpha, zeta) {
+        new_mu = matrix(va_mu, n, n_factors) # specified to case when n_factors=1
+        new_sigma = matrix(va_sigma, n, n_factors) # specified to case when n_factors=1
+        new_Lambda = matrix(model_coefs[1:(p*n_factors)], p, n_factors)
+        model_coefs = model_coefs[-(1:(p*n_factors))]
+        new_B = model_coefs[1:p]
+        model_coefs = model_coefs[-(1:p)]
+        new_beta = matrix(model_coefs[1:(p*q)], p, q)
+        
+        new_zeta = zeta
+        new_pai = pai
+        new_alpha = alpha
+        
+        ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
+        e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
+        grad.m = NULL
+        sum1 = new_alpha*( (m-R)-(m-1)*plogis(e_mat) )
+        for (w in 1:n_factors) {
+          grad.m = c(grad.m, rowSums(sweep(sum1, 2, new_Lambda[, w], "*")) - new_mu[, w])
+        }
+        return(c(grad.m))
+      }
+      
+      qq = try(optim(c(mu), method = "BFGS", fn = fn_va_mu, gr = gr_va_mu, model_coefs = c(new_Lambda, new_B, new_beta), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta, control = list(trace = 0, fnscale = -1, maxit = maxit, reltol = 1e-6)), silent = TRUE)
+      if ("try-error" %in% class(qq)) {
+        new_mu = mu
+      } else {
+        if (iter > 1 && m.cur.logfunc > qq$value) {
+          if (trace) {cat("Optimization of mu did not improve on iteration step ", iter, "\n")}
+          new_mu = mu
+        } else {
+          if (trace) {cat("Variational parameters mu updated", "\n")}
+          new_mu = matrix(qq$par, n, n_factors)
+          if (qq$convergence != 0) {
+            if (trace) {
+              cat("Optimization of mu did not converge on iteration step ", iter, "\n")
+            }
+          }
+        }
+      }
+      
+      q_m = list(value = fn_va_mu(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta))
+      m.new.logfunc = q_m$value
+      m.cur.logfunc = m.new.logfunc
+      
+      q_s = list(value = fn_va_sigma(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta))
+      s.new.logfunc = q_s$value
+      s.cur.logfunc = s.new.logfunc
+      
+      delta.alpha = abs(new_alpha - alpha)
+      sigma = new_sigma
+      mu = new_mu
+      alpha = new_alpha
+      pai = new_pai
+      p.iter = p.iter + 1
+      
+    }
+    
+    q_b = list(value = fn_model_coefs(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta))
+    b.new.logfunc = q_b$value
+    b.cur.logfunc = b.new.logfunc
+    
+    # Take values of VLB to define stopping rule
+    qq = list(value = VLB(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta))
+    new.VLB = qq$value
+    diff = abs(new.VLB - cur.VLB)
+    ratio = abs(new.VLB / cur.VLB)
+    if (trace) cat("New VLB: ", new.VLB, "cur VLB: ", cur.VLB, "Ratio of VLB: ", ratio, ". Difference in VLB: ", diff, "\n")
+    if (trace) cat("\nThe current evaluate results: ", evaluate_recovery(promax(new.Lambda)$loadings,promax(data$Lambda)$loadings))
+    cur.VLB = new.VLB
+    
+    qq = list(value = log_base(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta))
+    cur.log = qq$value
+    
+    EE = log_base2(c(new_Lambda, new_B, new_beta), va_mu = c(new_mu), va_sigma = c(new_sigma), pai = new_pai, alpha = new_alpha, zeta = new_zeta)
+    EN2 = 2*cur.log - 2*EE
+    
+    
+    pai = new_pai
+    alpha = new_alpha
+    B = new_B
+    Lambda = new_Lambda
+    mu = new_mu
+    sigma = new_sigma
+    zeta = new_zeta
+    
+    iter = iter + 1
+  }
+  if (iter > 99) {
+    print("FACAUB not converging!")
+  }
+  
+  ll = matrix(new_B, n, p, byrow = TRUE) + x1 %*% t(new_beta) + new_mu %*% t(new_Lambda)
+  e_mat = ll + 0.5*new_sigma %*% t(new_Lambda^2)
+  
+  if (is.null(x1)) beta = NULL
+  ll = plogis(ll)
+  e_mat = plogis(e_mat)
+  
+  out.list = list()
+  out.list$VLB = cur.VLB
+  out.list$EE = EE
+  out.list$lob = cur.log
+  out.list$EN2 = EN2
+  out.list$iter = iter - 1
+  out.list$lvs$alpha = new_alpha
+  out.list$lvs$mu = new_mu
+  out.list$lvs$sigma = new_sigma
+  out.list$params$pai = new_pai
+  out.list$params$B = new_B
+  out.list$params$Lambda = new_Lambda
+  out.list$params$beta = new_beta
+  out.list$params$zeta = new_zeta
+  out.list$ll = ll
+  out.list$e_mat = e_mat
+  
+  return(out.list)
+}
+
+
+#Vector and trace correlation coefficients (Ye and Weiss, JASA, 2003)
+eval.space <- function(A, B, orthnm = TRUE) 
+{
+  if(!is.matrix(A)) A <- as.matrix(A)
+  if(!is.matrix(B)) B <- as.matrix(B)
+  
+  if(orthnm)
+  { 
+    A <- qr.Q(qr(A))
+    B <- qr.Q(qr(B)) 
+  }
+  
+  mat <- t(B) %*% A %*% t(A) %*% B
+  d <- eigen(mat)$values
+  d <- (d + abs(d))/2
+  q <- sqrt(prod(d))
+  r <- sqrt(mean(d))
+  
+  c(q, r, acos(q))
 }
 
 evaluate_recovery = function(a, b) {
