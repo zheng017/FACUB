@@ -1,6 +1,6 @@
 Codes for the paper "Factor augmented CUB model for multivariate ordinal data".
 
-main functions: functions.R, MCUB.cpp, utils1.cpp, utils1_Annealing.R
+main functions: functions.R, MCUB.cpp, utils1.cpp, utils1_Annealing.cpp
 
 simulations: simu1.R, simu2.R
 
