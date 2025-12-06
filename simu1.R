@@ -1,16 +1,16 @@
-n=200
-p=10
-d=2
+library(vegan)
+library(MASS)
+library(tictoc)
+library(Rcpp)
 
 source("functions.R")
-library(Rcpp)
 gc()
 sourceCpp("utils1.cpp")
 sourceCpp("MCUB.cpp")
 
-library(vegan)
-library(MASS)
-library(tictoc)
+n=200
+p=10
+d=2
 q = 0
 m = 5
 b0 = 1
@@ -33,8 +33,7 @@ res3 = MCUB_cpp(R, cbind(x, data$f), m, b0 = rep(1, p))
 
 hic1 = hic_new(R, x, m, max_r)
 
-evaluate_FACUB(data, res1
+evaluate_FACUB(data, res1)
 evaluate_MCUB(data, res2)
 evaluate_MCUBo(data, res3)
-sapply(hic1, which.min))
-
+sapply(hic1, which.min)
